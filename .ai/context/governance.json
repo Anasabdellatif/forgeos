@@ -1,0 +1,35 @@
+{
+  "$comment": "Project governance gates for THIS repository -- the blueprint itself. Read by scripts/hooks/guard-governance on every Write/Edit. An adopting project receives templates/governance-template.json instead, which starts CLOSED; this file is the blueprint's own, and the blueprint has no application code to gate: its product is the scripts, contract, and templates, all of which live in paths this file never governs. codeAuthorized is true here because maintaining the blueprint IS the authorized work. protectedPaths is left at the template defaults so any stray app/ or src/ directory appearing in this repository would be caught -- it would mean someone is building a product inside the blueprint, which must not happen silently.",
+  "codeAuthorized": true,
+  "blockedUntil": [],
+  "decidedIn": ".ai/memory/decisions/",
+  "$implementationWindowComment": "Present and inactive on purpose. This repository is already authorized, so it has no use for a narrow window -- it carries the field at its closed default so the blueprint's own governance file stays a working example of the full schema.",
+  "implementationWindow": {
+    "active": false,
+    "allowedPaths": [],
+    "decidedIn": ".ai/memory/decisions/"
+  },
+  "protectedPaths": [
+    "src/**",
+    "app/**",
+    "lib/**",
+    "api/**",
+    "packages/**",
+    "services/**",
+    "migrations/**",
+    "database/**",
+    "infra/**",
+    "terraform/**",
+    "package.json",
+    "composer.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "build.gradle",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml"
+  ]
+}

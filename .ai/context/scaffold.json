@@ -1,0 +1,16 @@
+{
+  "$comment": "The directory structure this project's architecture requires. Written at the end of discovery phase 5 by the architect, then created on disk by scripts/ai/scaffold. Project-specific: never synced between projects. Every entry must trace to a requirement -- a layer no requirement demands does not get built.",
+  "generatedBy": "TBD: discovery phase 5, YYYY-MM-DD",
+  "architecture": "TBD: name the pattern this structure follows, e.g. layered, hexagonal, modular monolith, feature-sliced",
+  "gitkeep": true,
+  "directories": [
+    {
+      "path": "TBD: src",
+      "purpose": "TBD: what belongs here, and what does not"
+    },
+    {
+      "path": "TBD: tests",
+      "purpose": "TBD: which test level lives here"
+    }
+  ]
+}

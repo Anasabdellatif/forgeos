@@ -1,0 +1,38 @@
+{
+  "$comment": "Project governance gates. PROJECT-OWNED: seeded once by sync-blueprint into .ai/context/governance.json and never overwritten. Read by scripts/hooks/guard-governance on every Write/Edit. This is a different question from the discovery gate: discovery asks 'is the project defined?'; this asks 'has anyone authorized writing application code yet?'. A defined project can still be in alignment, review, or approval -- and until a human flips codeAuthorized, application paths stay closed. The default is closed. Opening it is a recorded decision, not a side effect.",
+  "codeAuthorized": false,
+  "blockedUntil": [
+    "G0: this file reviewed and the protected paths confirmed for this project"
+  ],
+  "decidedIn": ".ai/memory/decisions/",
+  "protectedPaths": [
+    "src/**",
+    "app/**",
+    "lib/**",
+    "api/**",
+    "packages/**",
+    "services/**",
+    "migrations/**",
+    "database/**",
+    "infra/**",
+    "terraform/**",
+    "package.json",
+    "composer.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "build.gradle",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml"
+  ],
+  "$implementationWindowComment": "CLOSED BY DEFAULT, and narrower than codeAuthorized -- never a substitute for it. The first implementation of anything is one slice: a migration, a scaffold, a spike. Setting codeAuthorized true to write that slice authorizes every other protected path at the same time, which is why this exists: leave codeAuthorized false, set active true, and list ONLY the slice in allowedPaths. Everything else stays blocked and the refusal names the open window. Fails closed in every direction: an inactive window opens nothing, an active window with an empty or non-array allowedPaths opens nothing, and a corrupted file opens nothing. Record the authorization in decidedIn, review the slice when it lands, and set active back to false -- an open window nobody closes is just codeAuthorized true with extra steps.",
+  "implementationWindow": {
+    "active": false,
+    "allowedPaths": [],
+    "decidedIn": ".ai/memory/decisions/"
+  },
+  "$protectedPathsComment": "EXAMPLES TO REVIEW, NOT DEFAULTS TO KEEP. Globs, relative to the project root, matched against the path an agent is about to write; ** matches across directories. They describe a ROOT layout, and a glob that matches nothing governs nothing: a project whose code lives in backend/ and frontend/ keeps codeAuthorized false over empty space -- closed, unprotected, and looking safe. A real adoption shipped exactly that. Replace this list with the project's own layout during adoption -- backend/** frontend/** for a split app, apps/** packages/** services/** for a monorepo -- then prove it by feeding guard-governance a representative path and checking for exit 2; docs/adoption.md section 6 carries the command. That review is gate G0 in blockedUntil: close it by doing it. Anything NOT listed is not governed by this file; .ai/, docs/, scripts/, templates/ are never listed, because alignment work must always be possible."
+}

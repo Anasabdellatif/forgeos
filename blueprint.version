@@ -1,0 +1,16 @@
+{
+  "$comment": "Identity of this blueprint. In the source repository role is 'source'. In an adopting project, sync-blueprint rewrites this file with role 'adopted', the source it came from, and a hash per synced file so local customizations can be detected instead of silently overwritten.",
+  "role": "source",
+  "version": "1.15.30",
+  "releasedAt": "2026-08-31",
+  "changelog": {
+    "1.15.30": "The launch-day review, closed the day it ran. An independent review of the published snapshot found two documents carrying more of the pre-launch line than intended: the discovery example, now rewritten around a declared fiction (a hobbyist ceramics course platform, with examples/README.md stating outright that every scenario in the directory is invented), and the readiness review, now a dated summary of what the pre-launch audit verified rather than the working audit itself. With them, the accuracy fixes the same review measured: the second policy-control figure on the front page now matches the tool (144), the token-economy figure matches the meter (3.5k), the front page no longer says the Command Center does not exist below the section documenting its shipped engine, the roadmap no longer opens the installability section by denying the five Proven rows under it, and the self-test suite headers no longer claim a case count three digits stale. No check weakened; 202 cases in both shells, same labels, same order.",
+    "1.15.29": "Initial public release of ForgeOS. This repository is a clean, verified snapshot of the source blueprint: 11 validation rows (8 gating), 202 self-test cases per shell proven label-identical by CI, a release workflow that builds a checksummed artifact from a tag, installers for Windows and Linux proven end to end by an install matrix, and a local forgeos command wrapping the sync engine. Development history before this release lives in the private development line; from here, every change lands in this changelog."
+  },
+  "requires": {
+    "powershell": ">=5.1",
+    "bash": ">=4.0",
+    "git": ">=2.0",
+    "jqOrPython3": "required by the .sh variants only"
+  }
+}

@@ -1,0 +1,63 @@
+# --- Secrets and local environment -------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+credentials.json
+service-account*.json
+
+# --- AI working artifacts ----------------------------------------------------
+.ai/tmp/
+.ai/context-package*.md
+*.context-package.md
+
+# --- Build and dependency output ---------------------------------------------
+node_modules/
+dist/
+build/
+out/
+target/
+bin/
+obj/
+coverage/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# --- Tooling caches ----------------------------------------------------------
+.cache/
+.turbo/
+.next/
+.nuxt/
+.parcel-cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.gradle/
+
+# --- Logs and temp -----------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+tmp/
+
+# --- OS and editor -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+
+# --- Claude Code local overrides ---------------------------------------------
+.claude/settings.local.json

@@ -1,0 +1,171 @@
+name: Release ForgeOS
+
+# SOURCE-ONLY. Declared in scripts/lib/blueprint-manifest.json under distribution.sourceOnly, so
+# sync-blueprint drops it and build-artifact excludes it. Without that declaration this file would
+# be copied into every adopting project -- .github/workflows is portable -- and would try to
+# release THEIR repository from THEIR tags. M-17 named that leak before the builder existed; M-18
+# built the mechanism for it with scripts/release as the first entry. This is the second, and it
+# needed no new mechanism, which was the point.
+#
+# No third-party actions: actions/checkout, plus the gh CLI that ships on the runner. No remote
+# script piping -- .ai/contract/safety.md forbids it and guard-bash blocks it, so a release path
+# cannot ask users to do what this repository's own hook refuses.
+#
+# Nothing here decides what goes into the artifact. scripts/release/build-artifact.sh derives that
+# from the manifest and re-checks the resolved list before writing; this workflow runs it, verifies
+# what it produced, and uploads exactly those two files.
+
+on:
+  push:
+    tags: ['v*']
+  # Dispatch exists so a run that failed after the tag was already pushed can be retried without
+  # deleting and re-pushing the tag. Moving a published tag is the thing this project refuses to
+  # do; giving the retry its own door is what keeps that refusal cheap. The input is validated
+  # below and must name a tag that already exists on the remote.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing version tag to release, e.g. v1.15.8'
+        required: true
+
+# Read-only by default. Only the job that publishes is granted more, and only contents: write,
+# which is the least GitHub offers for creating a release and uploading its assets.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build from the tag, verify, publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The tag reaches the shell through the environment, never through ${{ }} interpolated into
+      # a command. A workflow holding contents: write must not let a ref name become script.
+      - name: Resolve and validate the tag
+        id: tag
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          printf '%s\n' "$RAW_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "Refusing: '$RAW_TAG' is not a vMAJOR.MINOR.PATCH tag." >&2
+            exit 2
+          }
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $RAW_TAG"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      # A tag that names a version the commit does not carry is the one release mistake that
+      # cannot be undone by deleting the release: the artifact inside would be stamped with a
+      # different number than the tag people cite. Refuse before building, not after publishing.
+      - name: The tag must match blueprint.version
+        id: version
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          bp="$(grep -m1 '"version"' blueprint.version | sed 's/.*: *"//; s/".*//')"
+          [ -n "$bp" ] || { echo "Could not read a version from blueprint.version." >&2; exit 1; }
+          if [ "v$bp" != "$TAG" ]; then
+            echo "Refusing: the tag is $TAG but blueprint.version at that commit says $bp." >&2
+            exit 2
+          fi
+          echo "version=$bp" >> "$GITHUB_OUTPUT"
+          echo "blueprint.version says $bp, which matches $TAG"
+
+      - name: Release tooling self-test
+        run: bash scripts/release/selftest-release.sh
+
+      - name: Build the artifact from the tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: bash scripts/release/build-artifact.sh --ref "$TAG" --out dist
+
+      - name: Verify the checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd dist
+          sha256sum -c "forgeos-$VERSION.tar.gz.sha256"
+
+      # The builder already re-checks its own include list, and the self-test above pins that
+      # behaviour. This asks the same question of the bytes actually about to be published, which
+      # is the only copy anybody downloads. A boundary nobody re-checks is a boundary by hope.
+      - name: The artifact carries nothing source-only
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Strip the archive's own prefix by position, not by pattern: the version contains dots,
+          # and a version spliced into a regex matches more than it names.
+          tar -tzf "dist/forgeos-$VERSION.tar.gz" | sed 's|^[^/]*/||' > /tmp/entries.txt
+          jq -r '.distribution.sourceOnly[]?' scripts/lib/blueprint-manifest.json > /tmp/sourceonly.txt
+          leaks=0
+          while IFS= read -r p; do
+            if [ -n "$p" ] && grep -qE "^${p}(/|\$)" /tmp/entries.txt; then
+              echo "LEAK: the artifact carries the source-only path $p" >&2
+              leaks=$((leaks + 1))
+            fi
+          done < /tmp/sourceonly.txt
+          [ "$leaks" -eq 0 ] || exit 2
+          echo "No source-only path is inside the artifact, out of $(grep -c . /tmp/sourceonly.txt) declared."
+
+      # gh ships on the runner, so publishing needs no third-party action. Create when the release
+      # is new; upload with --clobber when it already exists, which is what makes a retry
+      # idempotent rather than a second, divergent release. Replacing an asset is safe here for a
+      # reason that only became true in v1.15.7: the same tag now builds byte-identical archives on
+      # any platform, so a re-run uploads the same bytes it uploaded before.
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          archive="dist/forgeos-$VERSION.tar.gz"
+          sum="$archive.sha256"
+          digest="$(cut -d' ' -f1 < "$sum")"
+
+          cat > /tmp/notes.md <<NOTES
+          ForgeOS $TAG — an engineering operating system for governed software delivery.
+
+          \`forgeos-$VERSION.tar.gz\` is a **sync source, not a product bundle**: extract it and point
+          \`sync-blueprint\` at it and it behaves exactly as a clone would. It carries the portable
+          half of the blueprint and the scaffolding a new project needs, and deliberately carries
+          none of this repository's own answers, history, or release tooling.
+
+          \`\`\`
+          sha256  $digest
+          \`\`\`
+
+          Verify before use:
+
+          \`\`\`bash
+          sha256sum -c forgeos-$VERSION.tar.gz.sha256
+          tar -tzf forgeos-$VERSION.tar.gz | head
+          \`\`\`
+
+          The same tag builds byte-identical archives on Windows and POSIX since v1.15.7, so this
+          checksum is reproducible rather than merely recorded.
+
+          Changelog: \`blueprint.version\`, read as described in \`docs/changelog.md\`.
+          Upgrading an adopted project: \`docs/adoption-upgrade-guide.md\`.
+          NOTES
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing its two assets."
+            gh release upload "$TAG" "$archive" "$sum" --clobber
+          else
+            gh release create "$TAG" "$archive" "$sum" \
+              --verify-tag \
+              --title "ForgeOS $TAG" \
+              --notes-file /tmp/notes.md
+          fi
+
+          echo "Assets now on $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[].name'

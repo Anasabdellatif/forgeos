@@ -1,0 +1,42 @@
+# Line-ending policy.
+#
+# Why this file exists: core.autocrlf is true on Windows, which rewrites LF to CRLF on checkout
+# for every text file. A CRLF in a .sh file breaks it on POSIX -- and `bash -n` passes it
+# silently, so the syntax gate cannot catch that class. Since the .sh scripts are now part of a
+# gating validation path, the risk stopped being cosmetic.
+#
+# This policy agrees with .editorconfig everywhere the two overlap:
+#   .editorconfig  [*] lf  ·  [*.{ps1,psm1,psd1}] crlf  ·  [*.sh] lf
+# Keep them in step. If you change one, change the other in the same commit.
+
+* text=auto
+
+# POSIX-executed or machine-parsed: must stay LF.
+*.sh       text eol=lf
+*.md       text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.version  text eol=lf
+*.gitkeep  text eol=lf
+
+# Windows-executed: must stay CRLF.
+*.ps1      text eol=crlf
+*.psm1     text eol=crlf
+*.psd1     text eol=crlf
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+
+# Paths no extension rule above reaches. These matched `* text=auto` alone, which pins the content
+# but not the line ending: `git archive` then converts using the BUILDER's platform, so one tag
+# produced CRLF on Windows and LF on POSIX and shipped two different artifacts (v1.15.6: 282,144
+# vs 281,685 bytes, five entries, identical once CR is stripped). Nothing else in the tree drifted
+# -- these were the only five of 215 tracked files with no explicit eol. Pinning them to lf states
+# what .editorconfig `[*] end_of_line = lf` already decided; the stored blobs are LF already, so
+# this changes no committed byte, it only takes the platform out of the answer.
+# The one *.example today is a POSIX settings file, which must be lf to be usable.
+LICENSE        text eol=lf
+.editorconfig  text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+*.example      text eol=lf

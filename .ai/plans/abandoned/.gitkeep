@@ -1,0 +1,6 @@
+# Keeps this required directory tracked by Git.
+#
+# Git does not track empty directories. Without this file a fresh clone would be missing
+# .ai/plans/abandoned/ and check-structure would fail on a correct repository.
+#
+# Do not delete. Abandoned plans live here, with a one-line reason; this file does not.

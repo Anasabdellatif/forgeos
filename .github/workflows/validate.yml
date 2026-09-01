@@ -1,0 +1,539 @@
+name: Validate Blueprint
+
+# Mirrors the local validation exactly: the same aggregate entry points, on both platforms.
+# Running the individual checks instead of check-all would let a gating check be added locally
+# and silently never run here.
+#
+# No deployment, no secrets, and no third-party actions. Only first-party actions/ are used:
+# checkout, plus upload-artifact and download-artifact, which carry the two self-test case lists
+# to the parity job because no single runner can execute both shells.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows · check-all.ps1
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # check-state-freshness measures how far the ledger lags HEAD, and the default
+          # fetch-depth of 1 leaves it nothing to measure -- it then reported OK for a ledger
+          # that was genuinely behind. The checker now refuses to guess under a truncated
+          # history; this gives it a history to read, so the answer here is real rather than
+          # merely honest. Only the jobs that run check-all pay for it.
+          fetch-depth: 0
+
+      # Windows PowerShell 5.1 -- the oldest supported host, and the one the .ps1 scripts are
+      # written against. pwsh 7 is also present on this runner; 5.1 is the stricter test.
+      - name: Validation suite
+        shell: powershell
+        run: .\scripts\validation\check-all.ps1
+
+      # Release tooling is source-only: it exists in the ForgeOS repository and is never copied
+      # into an adopting project. This workflow IS copied, so the step has to ask whether the
+      # tooling is here before testing it -- in an adopting project there is nothing to test,
+      # and a step that fails there would be this repository's problem leaking into theirs.
+      - name: Release tooling self-test
+        if: hashFiles('scripts/release/build-artifact.ps1') != ''
+        shell: powershell
+        run: .\scripts\release\selftest-release.ps1
+
+      - name: PowerShell parser
+        shell: powershell
+        run: |
+          $failed = 0
+          foreach ($f in (git ls-files '*.ps1')) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              $failed++
+              Write-Host "FAIL $f : $($errs[0].Message)"
+            }
+          }
+          Write-Host "$failed parse failure(s)"
+          if ($failed -gt 0) { exit 1 }
+
+      # The self-test already ran inside check-all. It runs once more here only to capture its case
+      # list for the parity job -- the two suites cannot run on one host, so their output travels.
+      - name: Capture the self-test case list
+        shell: powershell
+        # Out-File, not ">": PowerShell 5.1 redirects as UTF-16LE, and a POSIX grep reads that
+        # as zero lines. v1.10.4 failed on exactly that -- a complete 60-case file that looked
+        # empty to the parity job.
+        run: .\scripts\hooks\selftest.ps1 | Out-File -FilePath selftest-windows.txt -Encoding utf8
+
+      - name: Publish the case list
+        uses: actions/upload-artifact@v7
+        with:
+          name: selftest-windows
+          path: selftest-windows.txt
+
+  posix-jq:
+    name: Ubuntu · check-all.sh (jq path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # check-state-freshness measures how far the ledger lags HEAD, and the default
+          # fetch-depth of 1 leaves it nothing to measure -- it then reported OK for a ledger
+          # that was genuinely behind. The checker now refuses to guess under a truncated
+          # history; this gives it a history to read, so the answer here is real rather than
+          # merely honest. Only the jobs that run check-all pay for it.
+          fetch-depth: 0
+
+      # The .sh scripts read JSON through jq OR python3. Locally only the python3 path has ever
+      # been exercised, because jq is absent from the development machine. CI is the only place
+      # both branches can be proven, so each gets its own job.
+      - name: Ensure jq is present
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+
+      - name: Confirm which parser will be used
+        run: |
+          echo "jq      : $(command -v jq || echo MISSING)"
+          echo "python3 : $(command -v python3 || echo MISSING)"
+
+      - name: Validation suite
+        run: bash scripts/validation/check-all.sh
+
+      # Source-only, same reasoning as the Windows job: tested where it exists, absent elsewhere.
+      - name: Release tooling self-test
+        if: hashFiles('scripts/release/build-artifact.sh') != ''
+        run: bash scripts/release/selftest-release.sh
+
+      # Same purpose as the Windows capture: this half of the case list has to reach the parity job.
+      - name: Capture the self-test case list
+        run: bash scripts/hooks/selftest.sh > selftest-posix.txt
+
+      - name: Publish the case list
+        uses: actions/upload-artifact@v7
+        with:
+          name: selftest-posix
+          path: selftest-posix.txt
+
+  selftest-parity:
+    name: Ubuntu · self-test parity
+    runs-on: ubuntu-latest
+    needs: [windows, posix-jq]
+    steps:
+      - uses: actions/checkout@v5
+
+      # Both suites claim in their headers to run the same cases. That claim was false from v1.0.0
+      # to v1.8.2 and nothing could catch it, because no single job runs both. This job is the one
+      # that compares them: it fails on a different count, a different order, or a single label
+      # present on one side only.
+      - name: Download the Windows case list
+        uses: actions/download-artifact@v8
+        with:
+          name: selftest-windows
+          path: parity
+
+      - name: Download the POSIX case list
+        uses: actions/download-artifact@v8
+        with:
+          name: selftest-posix
+          path: parity
+
+      - name: Compare the case lists
+        run: bash scripts/validation/check-selftest-parity.sh parity/selftest-windows.txt parity/selftest-posix.txt
+
+  posix-python3:
+    name: Ubuntu · check-all.sh (python3 fallback)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # check-state-freshness measures how far the ledger lags HEAD, and the default
+          # fetch-depth of 1 leaves it nothing to measure -- it then reported OK for a ledger
+          # that was genuinely behind. The checker now refuses to guess under a truncated
+          # history; this gives it a history to read, so the answer here is real rather than
+          # merely honest. Only the jobs that run check-all pay for it.
+          fetch-depth: 0
+
+      # Hide jq so the python3 fallback is the path actually taken. This is the branch the
+      # development machine runs, and the one a minimal container is most likely to hit.
+      - name: Hide jq
+        run: |
+          if command -v jq >/dev/null; then sudo mv "$(command -v jq)" "$(command -v jq).disabled"; fi
+          echo "jq      : $(command -v jq || echo HIDDEN)"
+          echo "python3 : $(command -v python3 || echo MISSING)"
+
+      - name: Validation suite
+        run: bash scripts/validation/check-all.sh
+
+      - name: Shell syntax
+        run: |
+          failed=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "FAIL $f"; failed=$((failed + 1)); }
+          done < <(git ls-files '*.sh')
+          echo "$failed syntax failure(s)"
+          [ "$failed" -eq 0 ]
+
+  shellcheck:
+    name: Ubuntu · ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # git ls-files, not a glob: bash does not expand ** recursively without globstar, so
+      # scripts/**/*.sh silently means scripts/*/*.sh and would miss any deeper file.
+      - name: ShellCheck
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          shellcheck --version
+          git ls-files '*.sh' | xargs shellcheck --severity=warning
+
+  line-endings:
+    name: Ubuntu · line endings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # `git diff --check` is a no-op here: a fresh checkout has no working-tree diff, so it
+      # always passes and proves nothing. The meaningful equivalent is asking whether the
+      # committed tree already matches the .gitattributes policy. If renormalizing changes
+      # anything, a file was committed with endings the policy forbids -- which is exactly the
+      # failure that would break a .sh script on POSIX.
+      - name: Committed tree matches .gitattributes
+        run: |
+          git add --renormalize .
+          if ! git diff --cached --quiet; then
+            echo "These files are committed with line endings that contradict .gitattributes:"
+            git diff --cached --name-only
+            exit 1
+          fi
+          echo "Line endings match the policy."
+
+      - name: Report endings by attribute
+        run: git ls-files --eol | awk '{print $1, $2, $3}' | sort | uniq -c | sort -rn
+
+  # --- the install matrix -----------------------------------------------------------------------
+  # Both installers were graded Working, not Proven, and the difference is these two jobs. The
+  # maturity ladder reserves Proven for a channel a CI job exercises END TO END -- obtain, verify,
+  # install, then check-all inside the installed project -- and it names five conditions. Each job
+  # below carries all five, in order, and says which is which.
+  #
+  # A channel may be described only at the rung it occupies, and condition 5 is "the job runs on
+  # every platform the channel CLAIMS". The POSIX installer claims Linux and says in its own usage
+  # text that macOS is not claimed, so there is no macOS job here and its absence is not a gap --
+  # adding one is what would let the claim widen. Open question 002.
+
+  install-windows:
+    name: Windows · install matrix
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # (1) OBTAIN. A real release-style artifact and its checksum, built from the tracked tree by
+      # the same script a release uses. Nothing is fetched: the source of the install is a file this
+      # job made, which is what makes condition 4 -- no network after the obtain step -- structural
+      # rather than promised.
+      # THE WINDOWS BUILDER, not the POSIX one. Both exist and both are correct; running
+      # build-artifact.sh under Git Bash on a Windows runner is not a supported path and it does not
+      # fail -- it succeeds quietly with the wrong answer. Measured: 3 files and a 40 KB archive
+      # here, against 187 files and 411 KB from the same commit on Ubuntu and from build-artifact.ps1
+      # on this same runner. The release self-test proves the .ps1 builder on Windows, 14/14, in this
+      # very workflow; this job now uses the builder its platform already proves.
+      #
+      # Extracted BESIDE the .sha256 on purpose: the installer looks for the checksum in the parent
+      # of the source root, which is the layout a person downloading a release actually has.
+      - name: Build a release artifact, extract it beside its checksum
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path art -Force | Out-Null
+          # BARE paths here, not embedded-quoted ones. The call operator quotes its own arguments;
+          # embedded quotes are what Start-Process needs and they are wrong here -- passing
+          # "`"$path`"" produced 'Illegal characters in path'. Two invocation styles, two rules.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PWD\scripts\release\build-artifact.ps1" -Out "$PWD\art"
+          if ($LASTEXITCODE -ne 0) { throw "The artifact build failed (exit $LASTEXITCODE)" }
+          tar -xzf (Get-ChildItem art\*.tar.gz)[0].FullName -C art
+          $root = (Get-ChildItem art -Directory)[0].FullName
+          "SRC=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem art | ForEach-Object { Write-Host ("  {0}  {1}" -f $_.Name, $_.Length) }
+
+      # A build that produced the WRONG artifact must fail HERE, loudly, and completeness is the
+      # thing to check rather than mere existence: the first version of this asked only for
+      # blueprint.version, which a 3-file archive still carried, so it passed and the real problem
+      # surfaced two steps later as a confusing installer refusal.
+      - name: The artifact is complete, not merely present
+        shell: pwsh
+        run: |
+          $tgz = @(Get-ChildItem art\*.tar.gz -ErrorAction SilentlyContinue)
+          $sum = @(Get-ChildItem art\*.tar.gz.sha256 -ErrorAction SilentlyContinue)
+          if ($tgz.Count -ne 1) { throw "Expected one archive in art\, found $($tgz.Count)" }
+          if ($sum.Count -ne 1) { throw "Expected one checksum in art\, found $($sum.Count)" }
+          if (-not $env:SRC) { throw 'SRC was not set: the extraction produced no source root' }
+          foreach ($rel in @('blueprint.version', 'scripts\command\forgeos.ps1', 'scripts\command\forgeos.sh')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:SRC $rel))) {
+              throw "The built artifact is incomplete: $rel is missing from $env:SRC"
+            }
+          }
+          $n = @(Get-ChildItem $env:SRC -Recurse -File).Count
+          Write-Host "  archive : $($tgz[0].Name)  $($tgz[0].Length) bytes"
+          Write-Host "  source  : $env:SRC  ($n files)"
+          # A whole ForgeOS is well over a hundred files. A handful means the builder answered wrongly.
+          if ($n -lt 100) { throw "Only $n files in the artifact; the builder produced a partial tree" }
+
+      # (2) THE CHECKSUM MUST REJECT SOMETHING. A verification step that has never refused an
+      # artifact is not evidence, so this corrupts one byte and REQUIRES a refusal that writes
+      # nothing. If this step ever passes silently, the guarantee it stands for is gone.
+      # The corruption gets its own steps so the byte is flipped AFTER a known-good extraction, and
+      # so a failure here is unambiguous about which half broke.
+      - name: Copy the artifact aside and extract it
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path bad, bad-dest -Force | Out-Null
+          Copy-Item art\*.tar.gz, art\*.tar.gz.sha256 bad
+          tar -xzf (Get-ChildItem bad\*.tar.gz)[0].FullName -C bad
+          $root = (Get-ChildItem bad -Directory)[0].FullName
+          "BAD_SRC=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem bad | ForEach-Object { Write-Host ("  {0}  {1}" -f $_.Name, $_.Length) }
+
+      # The guard the last run needed. A checksum test is only a checksum test if the source would
+      # otherwise install: if the extracted tree is incomplete the installer refuses for that reason
+      # instead, and a green step would mean nothing. Prove the tree is usable BEFORE corrupting it.
+      - name: The extracted copy is a complete ForgeOS before anything is corrupted
+        shell: pwsh
+        run: |
+          if (-not $env:BAD_SRC) { throw 'BAD_SRC was not set: the extraction produced no source root' }
+          foreach ($rel in @('scripts\command\forgeos.ps1', 'blueprint.version')) {
+            $p = Join-Path $env:BAD_SRC $rel
+            if (-not (Test-Path -LiteralPath $p)) { throw "The extracted copy is incomplete: $rel is missing" }
+          }
+          Write-Host "  complete ForgeOS at $env:BAD_SRC"
+
+      - name: A corrupted artifact is refused, and writes nothing
+        shell: pwsh
+        run: |
+          $archive = (Get-ChildItem bad\*.tar.gz)[0].FullName
+          $bytes = [System.IO.File]::ReadAllBytes($archive)
+          $bytes[5000] = $bytes[5000] -bxor 0xFF
+          [System.IO.File]::WriteAllBytes($archive, $bytes)
+          $badRoot = $env:BAD_SRC
+          $err = Join-Path $PWD 'bad.err'
+          $p = Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PWD\scripts\install\install-forgeos.ps1`"",
+            '-Source', "`"$badRoot`"", '-Destination', "`"$PWD\bad-dest`"", '-Apply') `
+            -RedirectStandardError $err -RedirectStandardOutput (Join-Path $PWD 'bad.out')
+          $wrote = @(Get-ChildItem bad-dest -Force).Count
+          $stderr = (Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)
+          Write-Host "  exit=$($p.ExitCode)  files written=$wrote"
+          Write-Host $stderr
+          if ($p.ExitCode -ne 1) { throw "A corrupted artifact was not refused (exit $($p.ExitCode))" }
+          if ($wrote -ne 0) { throw "A refused install still wrote $wrote file(s)" }
+          # It must have been refused FOR THE RIGHT REASON. Exit 1 alone would also be satisfied by a
+          # bad path or a source that is not ForgeOS at all, and a checksum test that passes because
+          # something else went wrong is not a checksum test.
+          if ($stderr -notmatch 'Checksum mismatch') {
+            throw 'Exit 1, but not because of the checksum. The verification step did not fire.'
+          }
+
+      # (3) INSTALL. Dry run first, because dry run is the default everywhere here that writes and
+      # a channel that quietly wrote on a report would be a different channel.
+      - name: Dry run writes nothing, then -Apply installs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dest -Force | Out-Null
+          $inst = "`"$PWD\scripts\install\install-forgeos.ps1`""
+          $d = Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $inst,
+            '-Source', "`"$env:SRC`"", '-Destination', "`"$PWD\dest`"")
+          if (@(Get-ChildItem dest -Force).Count -ne 0) { throw 'The dry run wrote files' }
+          $a = Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $inst,
+            '-Source', "`"$env:SRC`"", '-Destination', "`"$PWD\dest`"", '-Apply')
+          if ($a.ExitCode -ne 0) { throw "Install failed (exit $($a.ExitCode))" }
+          $n = @(Get-ChildItem dest -File).Count
+          Write-Host "  installed $n file(s): $((Get-ChildItem dest -File | Select-Object -Expand Name) -join ', ')"
+          if ($n -ne 2) { throw "Expected two shims, found $n" }
+
+      # (4) THE INSTALLED COMMAND ANSWERS. Through the shim, never beside it: an install that only
+      # places files has not been shown to install anything.
+      - name: The installed command answers version and doctor
+        shell: pwsh
+        run: |
+          $v = (& "$PWD\dest\forgeos.cmd" version --json) -join "`n"
+          $o = (& "$PWD\dest\forgeos.cmd" doctor --json) -join "`n"
+          if ($v -notmatch '"schema":\s*"forgeos\.version/1"') { throw "version did not answer: $v" }
+          if ($o -notmatch '"schema":\s*"forgeos\.doctor/1"') { throw 'doctor did not answer' }
+          Write-Host '  version and doctor both answered through the shim'
+
+      # (5) PATH IS NEVER CHANGED. Asserted after a real install, not from the source text.
+      - name: PATH was not mutated
+        shell: pwsh
+        run: |
+          $u = [Environment]::GetEnvironmentVariable('PATH', 'User')
+          $m = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+          if ($u -and $u -like "*$PWD\dest*") { throw 'The installer wrote the user PATH' }
+          if ($m -and $m -like "*$PWD\dest*") { throw 'The installer wrote the machine PATH' }
+          Write-Host '  user and machine PATH both unchanged'
+
+      - name: -Force is refused
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path force-dest -Force | Out-Null
+          $p = Start-Process powershell.exe -NoNewWindow -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PWD\scripts\install\install-forgeos.ps1`"",
+            '-Source', "`"$env:SRC`"", '-Destination', "`"$PWD\force-dest`"", '-Apply', '-Force')
+          if ($p.ExitCode -ne 1) { throw "-Force was not refused (exit $($p.ExitCode))" }
+          if (@(Get-ChildItem force-dest -Force).Count -ne 0) { throw 'A refused install still wrote' }
+          Write-Host '  -Force refused, nothing written'
+
+      # (6) END TO END. Adopt a fresh project THROUGH the installed command, then run that
+      # project's own check-all. This is the condition the ladder actually turns on: not that the
+      # installer placed files, but that what it installed can carry a project.
+      - name: Adopt a project through the installed command, then validate it
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path proj -Force | Out-Null
+          Push-Location proj; git init -q .; git commit -q --allow-empty -m init; Pop-Location
+          & "$PWD\dest\forgeos.cmd" adopt --target "$PWD\proj" --apply
+          if ($LASTEXITCODE -ne 0) { throw "adopt failed (exit $LASTEXITCODE)" }
+          Push-Location proj
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PWD\scripts\validation\check-all.ps1"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "check-all failed inside the installed project (exit $code)" }
+          Write-Host '  check-all green inside the project this install created'
+
+      # (7) THE CUSTOMIZATION GUARANTEE SURVIVES THE CHANNEL. Edit a file the project owns, update
+      # through the installed command, and require the edit to still be there.
+      - name: A customized file survives an update through the installed command
+        shell: pwsh
+        run: |
+          # A PORTABLE file, deliberately. Editing something under .ai/context/ would prove nothing:
+          # that half is project-specific, so sync never compares it and it survives by construction.
+          # .ai/contract/core.md is a file sync DOES manage, so this is the path where the guarantee
+          # has to actually fire -- the run must report it as locally modified and leave it alone.
+          $f = "$PWD\proj\.ai\contract\core.md"
+          Add-Content -LiteralPath $f -Value '', '<!-- a local edit sync must not overwrite -->'
+          $before = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash
+          $out = (& "$PWD\dest\forgeos.cmd" update --target "$PWD\proj" --apply) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "update failed (exit $LASTEXITCODE)" }
+          Write-Host $out
+          $after = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash
+          if ($before -ne $after) { throw 'The update overwrote a customized file' }
+          if ($out -notmatch 'locally modified\s+1') { throw 'The run did not report the customized file at all' }
+          Write-Host '  reported as locally modified, left alone, byte-identical after the update'
+
+  install-posix:
+    name: Ubuntu · install matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # (1) OBTAIN, offline, from the tracked tree.
+      - name: Build a release artifact, extract it beside its checksum
+        run: |
+          mkdir -p art
+          bash scripts/release/build-artifact.sh --out art
+          tar -xzf art/*.tar.gz -C art
+          echo "SRC=$(find art -maxdepth 1 -mindepth 1 -type d | head -1)" >> "$GITHUB_ENV"
+          ls -l art
+
+      - name: The checksum verifies the artifact it names
+        run: cd art && sha256sum -c ./*.sha256
+
+      # (2) AND IT MUST REJECT A CORRUPTED ONE.
+      - name: A corrupted artifact is refused, and writes nothing
+        run: |
+          mkdir -p bad bad-dest
+          cp art/*.tar.gz art/*.tar.gz.sha256 bad/
+          tar -xzf bad/*.tar.gz -C bad
+          printf 'X' | dd of="$(ls bad/*.tar.gz)" bs=1 seek=5000 conv=notrunc 2>/dev/null
+          set +e
+          bash scripts/install/install-forgeos.sh \
+            --source "$(find bad -maxdepth 1 -mindepth 1 -type d | head -1)" \
+            --destination bad-dest --apply 2> bad.err
+          code=$?
+          set -e
+          wrote="$(find bad-dest -mindepth 1 | wc -l)"
+          echo "  exit=$code  files written=$wrote"
+          cat bad.err
+          [ "$code" -eq 1 ] || { echo 'A corrupted artifact was not refused'; exit 1; }
+          [ "$wrote" -eq 0 ] || { echo 'A refused install still wrote'; exit 1; }
+          # Refused FOR THE RIGHT REASON. Exit 1 alone would also be satisfied by a bad path or a
+          # source that is not ForgeOS at all, and a checksum test that passes because something
+          # else went wrong is not a checksum test.
+          grep -q 'Checksum mismatch' bad.err || {
+            echo 'Exit 1, but not because of the checksum. The verification step did not fire.'
+            exit 1; }
+
+      # (3) INSTALL: dry run writes nothing, --apply writes one EXECUTABLE launcher.
+      - name: Dry run writes nothing, then --apply installs
+        run: |
+          mkdir -p dest
+          bash scripts/install/install-forgeos.sh --source "$SRC" --destination dest
+          [ "$(find dest -mindepth 1 | wc -l)" -eq 0 ] || { echo 'The dry run wrote files'; exit 1; }
+          bash scripts/install/install-forgeos.sh --source "$SRC" --destination dest --apply
+          n="$(find dest -mindepth 1 | wc -l)"
+          echo "  installed $n file(s)"
+          [ "$n" -eq 1 ] || { echo "Expected one launcher, found $n"; exit 1; }
+          [ -x dest/forgeos ] || { echo 'The launcher is not executable'; exit 1; }
+
+      # (4) THE INSTALLED COMMAND ANSWERS, through the launcher.
+      - name: The installed command answers version and doctor
+        run: |
+          v="$(./dest/forgeos version --json)"
+          o="$(./dest/forgeos doctor --json)"
+          printf '%s' "$v" | grep -q '"schema": *"forgeos.version/1"' || { echo 'version did not answer'; exit 1; }
+          printf '%s' "$o" | grep -q '"schema": *"forgeos.doctor/1"'  || { echo 'doctor did not answer'; exit 1; }
+          echo '  version and doctor both answered through the launcher'
+
+      # (5) PATH IS NEVER CHANGED, and no shell profile is written.
+      - name: PATH was not mutated
+        run: |
+          case ":$PATH:" in *":$PWD/dest:"*) echo 'The installer put itself on PATH'; exit 1 ;; esac
+          for f in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
+            [ -f "$f" ] && grep -q "$PWD/dest" "$f" && { echo "The installer edited $f"; exit 1; }
+          done
+          echo '  PATH and every shell profile are untouched'
+
+      - name: --force is refused
+        run: |
+          mkdir -p force-dest
+          set +e
+          bash scripts/install/install-forgeos.sh --source "$SRC" --destination force-dest --apply --force
+          code=$?
+          set -e
+          [ "$code" -eq 1 ] || { echo "--force was not refused (exit $code)"; exit 1; }
+          [ "$(find force-dest -mindepth 1 | wc -l)" -eq 0 ] || { echo 'A refused install still wrote'; exit 1; }
+          echo '  --force refused, nothing written'
+
+      # (6) END TO END: adopt through the installed command, then validate that project.
+      - name: Adopt a project through the installed command, then validate it
+        run: |
+          mkdir -p proj
+          git -C proj init -q .
+          git -C proj -c user.email=ci@local -c user.name=ci commit -q --allow-empty -m init
+          ./dest/forgeos adopt --target "$PWD/proj" --apply
+          ( cd proj && bash scripts/validation/check-all.sh )
+          echo '  check-all green inside the project this install created'
+
+      # (7) THE CUSTOMIZATION GUARANTEE SURVIVES THE CHANNEL.
+      - name: A customized file survives an update through the installed command
+        run: |
+          # A PORTABLE file, deliberately. Editing something under .ai/context/ would prove nothing:
+          # that half is project-specific, so sync never compares it and it survives by construction.
+          # .ai/contract/core.md is a file sync DOES manage, so this is the path where the guarantee
+          # has to actually fire -- the run must report it as locally modified and leave it alone.
+          f="$PWD/proj/.ai/contract/core.md"
+          printf '\n<!-- a local edit sync must not overwrite -->\n' >> "$f"
+          before="$(sha256sum "$f" | cut -d' ' -f1)"
+          ./dest/forgeos update --target "$PWD/proj" --apply | tee update.log
+          after="$(sha256sum "$f" | cut -d' ' -f1)"
+          [ "$before" = "$after" ] || { echo 'The update overwrote a customized file'; exit 1; }
+          grep -qE 'locally modified +1' update.log || { echo 'The run did not report the customized file at all'; exit 1; }
+          echo '  reported as locally modified, left alone, byte-identical after the update'

@@ -1,0 +1,6 @@
+# Keeps this required directory tracked by Git.
+#
+# Git does not track empty directories. Without this file a fresh clone would be missing
+# .ai/tasks/inbox/ and check-structure would fail on a correct repository.
+#
+# Do not delete. Task records live here; this file does not.

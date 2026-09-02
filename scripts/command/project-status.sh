@@ -9,8 +9,8 @@
 # guessed. A string becomes "unknown", a number becomes null -- because zero tasks and no task
 # directory are different facts -- and the source is named in missingSources.
 #
-# Usage: project-status.sh [--json]
-# Exit 0 reported (including undefined, blocked, or missing sources); 1 the repository is unreadable.
+# Usage: project-status.sh [--json] [--section all|next|prompt]
+# Exit 0 reported; 1 the repository is unreadable, or --section prompt refuses to invent facts.
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -31,8 +31,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$SECTION" in
-  all|next) ;;
-  *) echo "Unknown section: $SECTION (expected 'all' or 'next')" >&2; exit 1 ;;
+  all|next|prompt) ;;
+  *) echo "Unknown section: $SECTION (expected 'all', 'next' or 'prompt')" >&2; exit 1 ;;
 esac
 
 [ -d "$REPO_ROOT" ] || { echo "Cannot read the repository root: $REPO_ROOT" >&2; exit 1; }
@@ -731,6 +731,229 @@ Stop after the local commit and report. Do not push.
 PROMPTEOF
 )"
 
+# --- the session package (--section prompt) -------------------------------------------------------
+# Everything the person starting the next session would otherwise ask a coordinator for: session,
+# model, effort, scope, policy, reading order, report shape, and the paste-ready prompt. Model and
+# effort come from scripts/lib/session-policy.json -- a data table, first matching category wins --
+# never from this file. The package REFUSES rather than invents: each fact below is read from a
+# file, and a missing file becomes a named refusal instead of a plausible guess.
+POLICY_FILE="$REPO_ROOT/scripts/lib/session-policy.json"
+pkg_model=''; pkg_effort=''; pkg_model_reason=''; pkg_category=''
+if [ -f "$POLICY_FILE" ]; then
+  # One category per line by contract (the file's own $comment says so), so a dependency-free read
+  # works on every platform: no jq, no python, exactly like governance.json above. The contract is
+  # ENFORCED, and on both shells: a "key" line that does not also carry its model and effort means
+  # the table was reformatted -- an editor's format-on-save is enough -- and a parser that shrugged
+  # here once picked a category with an empty model and exit 0, failing OPEN on the one file this
+  # feature tells projects to edit. Malformed means refuse, on this shell and the other one alike.
+  # Matched against the capability text ALONE, not its phase heading: a heading names the theme of
+  # a whole phase, and one domain word in it would drag every row under it into the same category
+  # -- found by running this against a real roadmap, where a phase about adoption made an
+  # implementation row recommend the adoption tier.
+  pkg_policy_ok=1
+  while IFS= read -r pline; do
+    printf '%s' "$pline" | grep -q '"model"' && printf '%s' "$pline" | grep -q '"effort"' || pkg_policy_ok=0
+  done <<PKGCHKEOF
+$(grep '"key"' "$POLICY_FILE")
+PKGCHKEOF
+  if [ "$pkg_policy_ok" -eq 1 ]; then
+    pkg_target="$(printf '%s' "$prompt_subject" | tr 'A-Z' 'a-z')"
+    while IFS= read -r pline; do
+      pkey="$(printf '%s' "$pline" | sed -n 's/.*"key": *"\([^"]*\)".*/\1/p')"
+      pmodel="$(printf '%s' "$pline" | sed -n 's/.*"model": *"\([^"]*\)".*/\1/p')"
+      peffort="$(printf '%s' "$pline" | sed -n 's/.*"effort": *"\([^"]*\)".*/\1/p')"
+      [ -n "$pkey" ] && [ -n "$pmodel" ] && [ -n "$peffort" ] || continue
+      pmatch="$(printf '%s' "$pline" | sed -n 's/.*"match": *"\([^"]*\)".*/\1/p')"
+      if [ -z "$pmatch" ] || printf '%s' "$pkg_target" | grep -qiE "$pmatch"; then
+        pkg_category="$pkey"
+        pkg_model="$pmodel"
+        pkg_effort="$peffort"
+        pkg_model_reason="$(printf '%s' "$pline" | sed -n 's/.*"reason": *"\([^"]*\)".*/\1/p')"
+        break
+      fi
+    done <<PKGPOLEOF
+$(grep '"key"' "$POLICY_FILE")
+PKGPOLEOF
+  fi
+fi
+
+# What the package cannot say without inventing. Each entry names the file and the way out.
+pkg_missing=''
+add_pkg_missing() { if [ -z "$pkg_missing" ]; then pkg_missing="$1"; else pkg_missing="$pkg_missing
+$1"; fi; }
+if [ "$rec_source" = 'missing' ]; then
+  add_pkg_missing 'docs/roadmap.md -- the roadmap is missing, so no capability can be named; seed it from templates/roadmap-template.md'
+elif [ "$rec_capability" = 'unknown' ]; then
+  add_pkg_missing "docs/roadmap.md -- $rec_reason; give the next phase a criteria table with a Status column, or mark a row incomplete"
+fi
+if [ "$ledger_present" != 'true' ]; then
+  add_pkg_missing '.ai/context/current-state.md -- the state ledger is missing, so the package cannot say where the project is; seed it from templates/state-ledger-template.md'
+fi
+if [ "$gov_state" != 'present' ]; then
+  add_pkg_missing '.ai/context/governance.json -- the gate cannot be read, so scope and authorization cannot be stated; seed it from templates/governance-template.json'
+fi
+if [ -z "$pkg_category" ]; then
+  add_pkg_missing 'scripts/lib/session-policy.json -- the model policy table is missing or matched nothing, so model and effort cannot be recommended; restore it from the blueprint source'
+fi
+
+# Same session or a new one -- decided by the work in flight, not by preference.
+if [ "$t_active" != 'null' ] && [ "${t_active:-0}" -gt 0 ]; then
+  pkg_new_session='false'
+  pkg_session_reason="a task is already active ($(printf '%s' "$t_active_names" | tr '\n' ' ' | sed 's/ *$//')); continue the session that owns it, or resume from its file"
+else
+  pkg_new_session='true'
+  pkg_session_reason='no task is active, so the slice starts clean with only this package as context'
+fi
+pkg_session_name="$repo_name - $prompt_subject"
+
+# Reading order: only files that exist are listed, in the order a cold session should open them.
+pkg_read=''
+add_read() {   # add_read <relative path> <why>
+  [ -f "$REPO_ROOT/$1" ] || return 0
+  if [ -z "$pkg_read" ]; then pkg_read="$1 -- $2"; else pkg_read="$pkg_read
+$1 -- $2"; fi
+}
+add_read 'CLAUDE.md'                        'the entry point; it loads the operating contract'
+add_read 'AGENTS.md'                        'the same contract, for tools that read this entry point'
+add_read '.ai/context/project.md'           'what this project is'
+add_read '.ai/context/constraints.md'       'the hard constraints and the prompt prohibitions'
+add_read '.ai/context/current-state.md'     'where the work stands right now'
+add_read '.ai/memory/open-questions.md'     'what is deliberately unresolved'
+add_read 'docs/roadmap.md'                  'the criteria row that defines this capability'
+if [ -n "$t_active_names" ]; then
+  while IFS= read -r tn; do
+    [ -n "$tn" ] && add_read ".ai/tasks/active/$tn" 'the active task this session continues'
+  done <<< "$t_active_names"
+fi
+
+# Scope. Allowed comes from the governance draft when one exists; forbidden is read from the
+# project's own protected paths, never composed here.
+if [ -n "$gd_paths" ]; then
+  pkg_allowed="$(printf '%s' "$gd_paths" | tr '\n' ' ' | sed 's/ *$//; s/ /, /g')"
+else
+  pkg_allowed='only the files the capability acceptance criteria require -- read the criteria row first'
+fi
+pkg_forbidden=''
+add_forbidden() { if [ -z "$pkg_forbidden" ]; then pkg_forbidden="$1"; else pkg_forbidden="$pkg_forbidden
+$1"; fi; }
+if [ -f "$GOV" ]; then
+  gov_prot="$(awk '/"protectedPaths"/{f=1} f{printf "%s", $0; if (index($0, "]")) exit}' "$GOV" \
+              | sed 's/.*\[//; s/\].*//' | grep -o '"[^"]*"' | tr -d '"')"
+  while IFS= read -r pp; do
+    [ -n "$pp" ] && add_forbidden "$pp -- protected by .ai/context/governance.json"
+  done <<< "$gov_prot"
+fi
+add_forbidden 'anything a "Do not" entry below names'
+
+# Commit, push, tag, deploy. This package can authorize NOTHING; it only reports what the project
+# itself already refuses, and sends everything else to the owner. Even the commit line is
+# governance-aware: behind a closed gate it points at the owner, because "allowed" printed into a
+# project whose own governance file says no would be this package overriding the gate it reports.
+if [ "$gov_authorized" = 'true' ]; then
+  pkg_policy_commit='allowed after the validation plan passes -- local only'
+else
+  pkg_policy_commit='not authorized by this package -- the governance gate is closed; ask the owner'
+fi
+if printf '%s' "$dn" | grep -qiE '(^|- )push'; then
+  pkg_policy_push="refused by the project's own prohibitions"
+else
+  pkg_policy_push='not authorized by this package -- ask the owner'
+fi
+if printf '%s' "$dn" | grep -qiE '(^|[^a-z])tag([^a-z]|$)|release'; then
+  pkg_policy_tag="refused by the project's own prohibitions"
+else
+  pkg_policy_tag='not authorized by this package -- ask the owner'
+fi
+if printf '%s' "$dn" | grep -qiE 'deploy'; then
+  pkg_policy_deploy="refused by the project's own prohibitions"
+else
+  pkg_policy_deploy='not authorized by this package -- ask the owner'
+fi
+
+# The report shape, from the contract's own closing section -- restated as a checklist so the next
+# session ends the way every session here is required to end.
+pkg_report='Summary -- what was asked and what actually happened
+Files Changed -- every file, with why
+Validation -- each command run, with its observed result, never its expected one
+Acceptance Criteria -- each criterion from the roadmap row, verified individually
+Risks and Limitations -- what was not checked, and what that leaves open
+Decisions -- anything decided along the way, recorded where decisions live
+Next Action -- the next safe step, or none
+State -- the state ledger refreshed before this report, so the report summarizes the repository'
+
+pkg_gov_authorized="$gov_authorized"
+[ "$pkg_gov_authorized" = 'null' ] && pkg_gov_authorized='unknown'
+
+package_prompt="$(cat <<PKGPROMPTEOF
+# ForgeOS session -- $prompt_subject
+
+Session:
+
+- Name: $pkg_session_name
+- New session: $pkg_new_session
+- Model: $pkg_model
+- Effort: $pkg_effort
+- Why: $pkg_model_reason
+
+You are working in:
+
+$REPO_ROOT
+
+Current state:
+
+- Repository: $repo_name
+- Branch: $branch
+- HEAD: $commit
+- Version: $bp_version
+- Project state: $project_state
+- Next capability: $rec_capability
+- Read its wording from: $rec_source
+
+Read first, in this order:
+
+$(printf '%s\n' "$pkg_read" | sed 's/^/- /')
+
+Goal:
+
+Implement the capability named above. Its acceptance criteria are the row that names it in the
+source above. Read that row before writing anything, and do not restate it from this prompt.
+
+Pre-checks:
+
+- confirm the branch, and that the working tree is clean
+- confirm HEAD is $commit
+- confirm the version is $bp_version
+- read the authoritative files before editing anything
+- reproduce any defect before fixing it
+
+Governance:
+
+$gov_line
+
+Scope:
+
+- Allowed: $pkg_allowed
+- Forbidden:
+$(printf '%s\n' "$pkg_forbidden" | sed 's/^/  - /')
+
+Validation:
+
+- narrow: $vp_first_narrow
+- full: $vp_first_full
+- ShellCheck must come from CI: $vp_ci
+
+Do not:
+
+$dn
+
+Final report -- include every item:
+
+$(printf '%s\n' "$pkg_report" | sed 's/^/- /')
+
+Stop after the local commit and report. Do not push.
+PKGPROMPTEOF
+)"
+
 # --- output ---------------------------------------------------------------------------------------
 jesc() {   # minimal JSON string escaping: backslash, quote, and the control characters
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\010\013\014\016-\037'
@@ -791,6 +1014,93 @@ if [ "$JSON" -eq 1 ] && [ "$SECTION" = 'next' ]; then
   }
 }
 NEXTJSONEOF
+  exit 0
+fi
+
+# The session-package subset. Like the next subset it carries its own schema id -- and unlike every
+# other emitter it can refuse: a package with invented facts would be worse than no package, so a
+# missing source turns the whole document into a named refusal with exit 1.
+if [ "$JSON" -eq 1 ] && [ "$SECTION" = 'prompt' ]; then
+  if [ -n "$pkg_missing" ]; then
+    cat <<PKGREFUSEEOF
+{
+  "schema": "forgeos.project-prompt/1",
+  "generatedFrom": "repository files only",
+  "generated": false,
+  "missing": $(jarr "$pkg_missing"),
+  "safety": {
+    "canModifyFiles": false,
+    "canAuthorizeCode": false,
+    "canOpenGovernanceWindow": false
+  }
+}
+PKGREFUSEEOF
+    exit 1
+  fi
+  cat <<PKGJSONEOF
+{
+  "schema": "forgeos.project-prompt/1",
+  "generatedFrom": "repository files only",
+  "generated": true,
+  "project": {
+    "identity": $(jstr "$repo_name"),
+    "version": $(jstr "$bp_version"),
+    "branch": $(jstr "$branch"),
+    "state": $(jstr "$project_state")
+  },
+  "stateSummary": {
+    "now": $(jnul "$s_now"),
+    "next": $(jnul "$s_next"),
+    "blockedBy": $(jnul "$s_blocked")
+  },
+  "nextRecommendation": {
+    "capability": $(jstr "$rec_capability"),
+    "reason": $(jstr "$rec_reason"),
+    "source": $(jstr "$rec_source"),
+    "confidence": $(jstr "$rec_confidence"),
+    "blocked": $rec_blocked,
+    "blockers": $(jarr "$rec_blockers")
+  },
+  "session": {
+    "newSession": $pkg_new_session,
+    "reason": $(jstr "$pkg_session_reason"),
+    "name": $(jstr "$pkg_session_name"),
+    "model": $(jstr "$pkg_model"),
+    "effort": $(jstr "$pkg_effort"),
+    "modelReason": $(jstr "$pkg_model_reason"),
+    "category": $(jstr "$pkg_category")
+  },
+  "governance": {
+    "windowRequired": $gd_required,
+    "codeAuthorized": $(jstr "$pkg_gov_authorized"),
+    "draftedPaths": $(jarr "$gd_paths")
+  },
+  "scope": {
+    "allowed": $(jstr "$pkg_allowed"),
+    "forbidden": $(jarr "$pkg_forbidden")
+  },
+  "policy": {
+    "commit": $(jstr "$pkg_policy_commit"),
+    "push": $(jstr "$pkg_policy_push"),
+    "tag": $(jstr "$pkg_policy_tag"),
+    "deploy": $(jstr "$pkg_policy_deploy")
+  },
+  "readFirst": $(jarr "$pkg_read"),
+  "validationPlan": {
+    "narrow": $(jarr "$vp_narrow"),
+    "full": $(jarr "$vp_full"),
+    "ciRequired": $vp_ci,
+    "notes": $(jarr "$vp_notes")
+  },
+  "reportChecklist": $(jarr "$pkg_report"),
+  "generatedPrompt": "$(jmul "$package_prompt")",
+  "safety": {
+    "canModifyFiles": false,
+    "canAuthorizeCode": false,
+    "canOpenGovernanceWindow": false
+  }
+}
+PKGJSONEOF
   exit 0
 fi
 
@@ -958,6 +1268,92 @@ fi
 
 show() { printf '  %-22s %s\n' "$1" "$2"; }
 nz()   { if [ -z "$1" ] || [ "$1" = 'null' ]; then printf 'unknown'; else printf '%s' "$1"; fi; }
+
+# The human half of --section prompt: the whole package, self-contained, then out. It refuses with
+# exit 1 rather than print a prompt that guesses -- the refusal names every missing file and the
+# way to supply it, which is the useful half of a coordinator's answer anyway.
+if [ "$SECTION" = 'prompt' ]; then
+  echo ''
+  echo "ForgeOS session package  [$project_state]"
+  if [ -n "$pkg_missing" ]; then
+    echo ''
+    echo '  cannot generate: a package would have to invent facts, and this command refuses to.'
+    echo ''
+    echo '  missing:'
+    while IFS= read -r pm; do [ -n "$pm" ] && printf '    - %s\n' "$pm"; done <<< "$pkg_missing"
+    echo ''
+    echo '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+    echo ''
+    exit 1
+  fi
+  echo ''
+  echo '  project:'
+  printf '    %-14s %s\n' 'identity' "$repo_name"
+  printf '    %-14s %s\n' 'version' "$bp_version"
+  printf '    %-14s %s\n' 'branch' "$branch"
+  printf '    %-14s %s\n' 'state' "$project_state"
+  [ -n "$s_now" ] && printf '    %-14s %s\n' 'now' "$s_now"
+  echo ''
+  echo '  next capability:'
+  printf '    %-14s %s\n' 'capability' "$rec_capability"
+  printf '    %-14s %s\n' 'source' "$rec_source"
+  printf '    %-14s %s\n' 'confidence' "$rec_confidence"
+  printf '    %-14s %s\n' 'blocked' "$rec_blocked"
+  if [ -n "$rec_blockers" ]; then
+    while IFS= read -r b; do [ -n "$b" ] && printf '      - %s\n' "$b"; done <<< "$rec_blockers"
+  fi
+  echo ''
+  echo '  session:'
+  printf '    %-14s %s\n' 'new session' "$pkg_new_session"
+  printf '    %-14s %s\n' 'reason' "$pkg_session_reason"
+  printf '    %-14s %s\n' 'name' "$pkg_session_name"
+  printf '    %-14s %s\n' 'model' "$pkg_model"
+  printf '    %-14s %s\n' 'effort' "$pkg_effort"
+  printf '    %-14s %s\n' 'why' "$pkg_model_reason"
+  printf '    %-14s %s\n' 'category' "$pkg_category"
+  echo ''
+  echo '  governance:'
+  printf '    %-14s %s\n' 'window needed' "$gd_required"
+  printf '    %-14s %s\n' 'codeAuthorized' "$pkg_gov_authorized"
+  if [ -n "$gd_rationale" ]; then
+    while IFS= read -r r; do [ -n "$r" ] && printf '      - %s\n' "$r"; done <<< "$gd_rationale"
+  fi
+  echo ''
+  echo '  scope:'
+  printf '    %-14s %s\n' 'allowed' "$pkg_allowed"
+  echo '    forbidden:'
+  while IFS= read -r fb; do [ -n "$fb" ] && printf '      - %s\n' "$fb"; done <<< "$pkg_forbidden"
+  echo ''
+  echo '  policy:'
+  printf '    %-8s %s\n' 'commit' "$pkg_policy_commit"
+  printf '    %-8s %s\n' 'push' "$pkg_policy_push"
+  printf '    %-8s %s\n' 'tag' "$pkg_policy_tag"
+  printf '    %-8s %s\n' 'deploy' "$pkg_policy_deploy"
+  echo ''
+  echo '  read first:'
+  while IFS= read -r rf; do [ -n "$rf" ] && printf '    - %s\n' "$rf"; done <<< "$pkg_read"
+  echo ''
+  echo '  validation plan -- a plan; nothing in it has been run:'
+  if [ -n "$vp_narrow" ]; then
+    while IFS= read -r c; do [ -n "$c" ] && printf '    narrow   %s\n' "$c"; done <<< "$vp_narrow"
+  fi
+  if [ -n "$vp_full" ]; then
+    while IFS= read -r c; do [ -n "$c" ] && printf '    full     %s\n' "$c"; done <<< "$vp_full"
+  fi
+  printf '    %-8s %s\n' 'from CI' "ShellCheck required: $vp_ci"
+  echo ''
+  echo '  final report checklist:'
+  while IFS= read -r rp; do [ -n "$rp" ] && printf '    - %s\n' "$rp"; done <<< "$pkg_report"
+  echo ''
+  echo '  session prompt -- copy everything between the two rules:'
+  echo '--------------------------------------------------------------------------------'
+  printf '%s\n' "$package_prompt"
+  echo '--------------------------------------------------------------------------------'
+  echo ''
+  echo '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+  echo ''
+  exit 0
+fi
 
 # The human half of --section next. The blocks themselves are printed by the same code further down,
 # so this skips the report header and the map rather than reprinting anything.

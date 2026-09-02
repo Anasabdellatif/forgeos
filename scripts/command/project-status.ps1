@@ -17,14 +17,14 @@
 
 .NOTES
     Exit 0 reported (including undefined, blocked, or missing sources); 1 the repository is
-    unreadable.
+    unreadable, or -Section prompt refuses to invent facts.
 #>
 # -Section exists so the wrapper can ask for a subset instead of re-parsing this command's output.
 # One emitter, one place: a consumer that had to slice JSON back apart would be a second grammar for
 # the same document, and this repository has paid for that mistake before.
 param(
     [switch]$Json,
-    [ValidateSet('all', 'next')]
+    [ValidateSet('all', 'next', 'prompt')]
     [string]$Section = 'all'
 )
 
@@ -769,6 +769,238 @@ $dnText
 Stop after the local commit and report. Do not push.
 "@
 
+# --- the session package (-Section prompt) --------------------------------------------------------
+# Everything the person starting the next session would otherwise ask a coordinator for: session,
+# model, effort, scope, policy, reading order, report shape, and the paste-ready prompt. Model and
+# effort come from scripts/lib/session-policy.json -- a data table, first matching category wins --
+# never from this file. The package REFUSES rather than invents: each fact below is read from a
+# file, and a missing file becomes a named refusal instead of a plausible guess.
+$policyPath = Join-Path $repoRoot 'scripts\lib\session-policy.json'
+$pkgModel = ''; $pkgEffort = ''; $pkgModelReason = ''; $pkgCategory = ''
+if (Test-Path -LiteralPath $policyPath) {
+    try {
+        $policyRaw = Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8
+        # The one-category-per-line contract is ENFORCED here too, though this parser would not
+        # need it: the POSIX twin reads the table line-wise, and a reformatted file -- an editor's
+        # format-on-save is enough -- once made the two shells answer differently for the same
+        # repository. Malformed for one shell is malformed for both, and malformed means refuse.
+        $policyOk = $true
+        foreach ($kl in @($policyRaw -split "`n" | Where-Object { $_ -match '"key"' })) {
+            if ($kl -notmatch '"model"' -or $kl -notmatch '"effort"') { $policyOk = $false }
+        }
+        if ($policyOk) {
+            $policyDoc = $policyRaw | ConvertFrom-Json
+            # Matched against the capability text ALONE, not its phase heading: a heading names
+            # the theme of a whole phase, and one domain word in it would drag every row under it
+            # into the same category -- found by running this against a real roadmap, where a
+            # phase about adoption made an implementation row recommend the adoption tier.
+            # Invariant lowering and invariant matching, because a culture-sensitive lower-case
+            # turns "CI" into a dotless i under tr-TR and the category silently changes with the
+            # machine's locale -- the exact environment dependence this command forbids itself.
+            $pkgTarget = $promptSubject.ToLowerInvariant()
+            foreach ($cat in @($policyDoc.categories)) {
+                $hasMatch = $null -ne $cat.PSObject.Properties['match']
+                # A row whose regex cannot compile is skipped, not fatal: the POSIX twin treats an
+                # invalid pattern as a non-match and reads on, and one bad row in an edited table
+                # must not take the valid rows below it down with it.
+                $rowHit = $false
+                if (-not $hasMatch) {
+                    $rowHit = $true
+                } else {
+                    try {
+                        $rowHit = [regex]::IsMatch($pkgTarget, $cat.match, 'IgnoreCase, CultureInvariant')
+                    } catch { $rowHit = $false }
+                }
+                if ($rowHit) {
+                    $pkgCategory = $cat.key
+                    $pkgModel = $cat.model
+                    $pkgEffort = $cat.effort
+                    $pkgModelReason = $cat.reason
+                    break
+                }
+            }
+        }
+    } catch { }
+}
+
+# What the package cannot say without inventing. Each entry names the file and the way out.
+$pkgMissing = New-Object System.Collections.Generic.List[string]
+if ($recSource -eq 'missing') {
+    $pkgMissing.Add('docs/roadmap.md -- the roadmap is missing, so no capability can be named; seed it from templates/roadmap-template.md')
+} elseif ($recCapability -eq 'unknown') {
+    $pkgMissing.Add("docs/roadmap.md -- $recReason; give the next phase a criteria table with a Status column, or mark a row incomplete")
+}
+if (-not $ledgerPresent) {
+    $pkgMissing.Add('.ai/context/current-state.md -- the state ledger is missing, so the package cannot say where the project is; seed it from templates/state-ledger-template.md')
+}
+if ($govState -ne 'present') {
+    $pkgMissing.Add('.ai/context/governance.json -- the gate cannot be read, so scope and authorization cannot be stated; seed it from templates/governance-template.json')
+}
+if (-not $pkgCategory) {
+    $pkgMissing.Add('scripts/lib/session-policy.json -- the model policy table is missing or matched nothing, so model and effort cannot be recommended; restore it from the blueprint source')
+}
+
+# Same session or a new one -- decided by the work in flight, not by preference.
+if ($null -ne $tActive -and $tActive -gt 0) {
+    $pkgNewSession = $false
+    $pkgSessionReason = "a task is already active ($((@($activeNames) -join ' ').Trim())); continue the session that owns it, or resume from its file"
+} else {
+    $pkgNewSession = $true
+    $pkgSessionReason = 'no task is active, so the slice starts clean with only this package as context'
+}
+$pkgSessionName = "$repoName - $promptSubject"
+
+# Reading order: only files that exist are listed, in the order a cold session should open them.
+$pkgRead = New-Object System.Collections.Generic.List[string]
+function Add-Read {
+    param([string]$RelPath, [string]$Why)
+    if (Test-Path -LiteralPath (Join-Path $repoRoot ($RelPath -replace '/', '\'))) {
+        $pkgRead.Add("$RelPath -- $Why")
+    }
+}
+Add-Read 'CLAUDE.md'                    'the entry point; it loads the operating contract'
+Add-Read 'AGENTS.md'                    'the same contract, for tools that read this entry point'
+Add-Read '.ai/context/project.md'       'what this project is'
+Add-Read '.ai/context/constraints.md'   'the hard constraints and the prompt prohibitions'
+Add-Read '.ai/context/current-state.md' 'where the work stands right now'
+Add-Read '.ai/memory/open-questions.md' 'what is deliberately unresolved'
+Add-Read 'docs/roadmap.md'              'the criteria row that defines this capability'
+foreach ($tn in @($activeNames)) {
+    if ($tn) { Add-Read ".ai/tasks/active/$tn" 'the active task this session continues' }
+}
+
+# Scope. Allowed comes from the governance draft when one exists; forbidden is read from the
+# project's own protected paths, never composed here.
+if ($gdPaths.Count -gt 0) {
+    $pkgAllowed = (@($gdPaths) -join ', ')
+} else {
+    $pkgAllowed = 'only the files the capability acceptance criteria require -- read the criteria row first'
+}
+$pkgForbidden = New-Object System.Collections.Generic.List[string]
+if (Test-Path -LiteralPath $govPath) {
+    try {
+        $govDoc2 = Get-Content -LiteralPath $govPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($pp in @($govDoc2.protectedPaths)) {
+            if ($pp) { $pkgForbidden.Add("$pp -- protected by .ai/context/governance.json") }
+        }
+    } catch { }
+}
+$pkgForbidden.Add('anything a "Do not" entry below names')
+
+# Commit, push, tag, deploy. This package can authorize NOTHING; it only reports what the project
+# itself already refuses, and sends everything else to the owner. Even the commit line is
+# governance-aware: behind a closed gate it points at the owner, because "allowed" printed into a
+# project whose own governance file says no would be this package overriding the gate it reports.
+if ($govAuthorized -eq $true) {
+    $pkgPolicyCommit = 'allowed after the validation plan passes -- local only'
+} else {
+    $pkgPolicyCommit = 'not authorized by this package -- the governance gate is closed; ask the owner'
+}
+if ($dnText -match '(^|- )push') {
+    $pkgPolicyPush = "refused by the project's own prohibitions"
+} else {
+    $pkgPolicyPush = 'not authorized by this package -- ask the owner'
+}
+if ($dnText -match '(^|[^a-z])tag([^a-z]|$)|release') {
+    $pkgPolicyTag = "refused by the project's own prohibitions"
+} else {
+    $pkgPolicyTag = 'not authorized by this package -- ask the owner'
+}
+if ($dnText -match 'deploy') {
+    $pkgPolicyDeploy = "refused by the project's own prohibitions"
+} else {
+    $pkgPolicyDeploy = 'not authorized by this package -- ask the owner'
+}
+
+# The report shape, from the contract's own closing section -- restated as a checklist so the next
+# session ends the way every session here is required to end.
+$pkgReport = @(
+    'Summary -- what was asked and what actually happened',
+    'Files Changed -- every file, with why',
+    'Validation -- each command run, with its observed result, never its expected one',
+    'Acceptance Criteria -- each criterion from the roadmap row, verified individually',
+    'Risks and Limitations -- what was not checked, and what that leaves open',
+    'Decisions -- anything decided along the way, recorded where decisions live',
+    'Next Action -- the next safe step, or none',
+    'State -- the state ledger refreshed before this report, so the report summarizes the repository'
+)
+
+$pkgGovAuthorized = 'unknown'
+if ($null -ne $govAuthorized) { $pkgGovAuthorized = $govAuthorized.ToString().ToLower() }
+$pkgNewSessionText = $pkgNewSession.ToString().ToLower()
+$pkgReadText = (@($pkgRead | ForEach-Object { "- $_" }) -join "`n")
+$pkgForbiddenText = (@($pkgForbidden | ForEach-Object { "  - $_" }) -join "`n")
+$pkgReportText = (@($pkgReport | ForEach-Object { "- $_" }) -join "`n")
+
+$packagePrompt = @"
+# ForgeOS session -- $promptSubject
+
+Session:
+
+- Name: $pkgSessionName
+- New session: $pkgNewSessionText
+- Model: $pkgModel
+- Effort: $pkgEffort
+- Why: $pkgModelReason
+
+You are working in:
+
+$repoRoot
+
+Current state:
+
+- Repository: $repoName
+- Branch: $branch
+- HEAD: $commit
+- Version: $bpVersion
+- Project state: $projectState
+- Next capability: $recCapability
+- Read its wording from: $recSource
+
+Read first, in this order:
+
+$pkgReadText
+
+Goal:
+
+Implement the capability named above. Its acceptance criteria are the row that names it in the
+source above. Read that row before writing anything, and do not restate it from this prompt.
+
+Pre-checks:
+
+- confirm the branch, and that the working tree is clean
+- confirm HEAD is $commit
+- confirm the version is $bpVersion
+- read the authoritative files before editing anything
+- reproduce any defect before fixing it
+
+Governance:
+
+$govLine
+
+Scope:
+
+- Allowed: $pkgAllowed
+- Forbidden:
+$pkgForbiddenText
+
+Validation:
+
+- narrow: $vpFirstNarrow
+- full: $vpFirstFull
+- ShellCheck must come from CI: $ciText
+
+Do not:
+
+$dnText
+
+Final report -- include every item:
+
+$pkgReportText
+
+Stop after the local commit and report. Do not push.
+"@
+
 $map = [ordered]@{
     product = [ordered]@{
         state = (Get-DocState $prodN $prodU); sources = @('docs/product')
@@ -909,6 +1141,59 @@ if ($Json -and $Section -eq 'next') {
     exit 0
 }
 
+# The session-package subset. Like the next subset it carries its own schema id -- and unlike every
+# other emitter it can refuse: a package with invented facts would be worse than no package, so a
+# missing source turns the whole document into a named refusal with exit 1.
+if ($Json -and $Section -eq 'prompt') {
+    if ($pkgMissing.Count -gt 0) {
+        ([ordered]@{
+            schema        = 'forgeos.project-prompt/1'
+            generatedFrom = 'repository files only'
+            generated     = $false
+            missing       = @($pkgMissing)
+            safety        = $status.safety
+        }) | ConvertTo-Json -Depth 6
+        exit 1
+    }
+    ([ordered]@{
+        schema        = 'forgeos.project-prompt/1'
+        generatedFrom = 'repository files only'
+        generated     = $true
+        project       = [ordered]@{
+            identity = $repoName; version = $bpVersion; branch = $branch; state = $projectState
+        }
+        stateSummary  = [ordered]@{
+            now = $sNow; next = $sNext; blockedBy = $sBlocked
+        }
+        nextRecommendation = [ordered]@{
+            capability = $recCapability; reason = $recReason; source = $recSource
+            confidence = $recConfidence; blocked = $recBlocked; blockers = @($recBlockers)
+        }
+        session       = [ordered]@{
+            newSession = $pkgNewSession; reason = $pkgSessionReason; name = $pkgSessionName
+            model = $pkgModel; effort = $pkgEffort; modelReason = $pkgModelReason
+            category = $pkgCategory
+        }
+        governance    = [ordered]@{
+            windowRequired = $gdRequired; codeAuthorized = $pkgGovAuthorized
+            draftedPaths = @($gdPaths)
+        }
+        scope         = [ordered]@{
+            allowed = $pkgAllowed; forbidden = @($pkgForbidden)
+        }
+        policy        = [ordered]@{
+            commit = $pkgPolicyCommit; push = $pkgPolicyPush
+            tag = $pkgPolicyTag; deploy = $pkgPolicyDeploy
+        }
+        readFirst      = @($pkgRead)
+        validationPlan = $status.validationPlan
+        reportChecklist = @($pkgReport)
+        generatedPrompt = $packagePrompt
+        safety          = $status.safety
+    }) | ConvertTo-Json -Depth 6
+    exit 0
+}
+
 if ($Json) {
     $status | ConvertTo-Json -Depth 6
     exit 0
@@ -923,6 +1208,84 @@ function Nz {
     # The JSON is untouched: ConvertTo-Json emits the JSON literal regardless of this.
     if ($Value -is [bool]) { return $Value.ToString().ToLower() }
     return $Value
+}
+
+# The human half of -Section prompt: the whole package, self-contained, then out. It refuses with
+# exit 1 rather than print a prompt that guesses -- the refusal names every missing file and the
+# way to supply it, which is the useful half of a coordinator's answer anyway.
+if ($Section -eq 'prompt') {
+    Write-Output ''
+    Write-Output "ForgeOS session package  [$projectState]"
+    if ($pkgMissing.Count -gt 0) {
+        Write-Output ''
+        Write-Output '  cannot generate: a package would have to invent facts, and this command refuses to.'
+        Write-Output ''
+        Write-Output '  missing:'
+        foreach ($pm in $pkgMissing) { Write-Output ("    - {0}" -f $pm) }
+        Write-Output ''
+        Write-Output '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+        Write-Output ''
+        exit 1
+    }
+    Write-Output ''
+    Write-Output '  project:'
+    Write-Output ("    {0,-14} {1}" -f 'identity', $repoName)
+    Write-Output ("    {0,-14} {1}" -f 'version', $bpVersion)
+    Write-Output ("    {0,-14} {1}" -f 'branch', $branch)
+    Write-Output ("    {0,-14} {1}" -f 'state', $projectState)
+    if ($sNow) { Write-Output ("    {0,-14} {1}" -f 'now', $sNow) }
+    Write-Output ''
+    Write-Output '  next capability:'
+    Write-Output ("    {0,-14} {1}" -f 'capability', $recCapability)
+    Write-Output ("    {0,-14} {1}" -f 'source', $recSource)
+    Write-Output ("    {0,-14} {1}" -f 'confidence', $recConfidence)
+    Write-Output ("    {0,-14} {1}" -f 'blocked', (Nz $recBlocked))
+    foreach ($b in $recBlockers) { Write-Output ("      - {0}" -f $b) }
+    Write-Output ''
+    Write-Output '  session:'
+    Write-Output ("    {0,-14} {1}" -f 'new session', $pkgNewSessionText)
+    Write-Output ("    {0,-14} {1}" -f 'reason', $pkgSessionReason)
+    Write-Output ("    {0,-14} {1}" -f 'name', $pkgSessionName)
+    Write-Output ("    {0,-14} {1}" -f 'model', $pkgModel)
+    Write-Output ("    {0,-14} {1}" -f 'effort', $pkgEffort)
+    Write-Output ("    {0,-14} {1}" -f 'why', $pkgModelReason)
+    Write-Output ("    {0,-14} {1}" -f 'category', $pkgCategory)
+    Write-Output ''
+    Write-Output '  governance:'
+    Write-Output ("    {0,-14} {1}" -f 'window needed', (Nz $gdRequired))
+    Write-Output ("    {0,-14} {1}" -f 'codeAuthorized', $pkgGovAuthorized)
+    foreach ($r in $gdRationale) { Write-Output ("      - {0}" -f $r) }
+    Write-Output ''
+    Write-Output '  scope:'
+    Write-Output ("    {0,-14} {1}" -f 'allowed', $pkgAllowed)
+    Write-Output '    forbidden:'
+    foreach ($fb in $pkgForbidden) { Write-Output ("      - {0}" -f $fb) }
+    Write-Output ''
+    Write-Output '  policy:'
+    Write-Output ("    {0,-8} {1}" -f 'commit', $pkgPolicyCommit)
+    Write-Output ("    {0,-8} {1}" -f 'push', $pkgPolicyPush)
+    Write-Output ("    {0,-8} {1}" -f 'tag', $pkgPolicyTag)
+    Write-Output ("    {0,-8} {1}" -f 'deploy', $pkgPolicyDeploy)
+    Write-Output ''
+    Write-Output '  read first:'
+    foreach ($rf in $pkgRead) { Write-Output ("    - {0}" -f $rf) }
+    Write-Output ''
+    Write-Output '  validation plan -- a plan; nothing in it has been run:'
+    foreach ($c in $vpNarrow) { Write-Output ("    narrow   {0}" -f $c) }
+    foreach ($c in $vpFull)   { Write-Output ("    full     {0}" -f $c) }
+    Write-Output ("    {0,-8} {1}" -f 'from CI', ("ShellCheck required: " + (Nz $vpCi)))
+    Write-Output ''
+    Write-Output '  final report checklist:'
+    foreach ($rp in $pkgReport) { Write-Output ("    - {0}" -f $rp) }
+    Write-Output ''
+    Write-Output '  session prompt -- copy everything between the two rules:'
+    Write-Output '--------------------------------------------------------------------------------'
+    Write-Output $packagePrompt
+    Write-Output '--------------------------------------------------------------------------------'
+    Write-Output ''
+    Write-Output '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+    Write-Output ''
+    exit 0
 }
 
 # The human half of -Section next. The blocks themselves are printed by the same code further down,

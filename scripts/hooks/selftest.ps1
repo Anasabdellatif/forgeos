@@ -2466,6 +2466,176 @@ try {
     if (($ppOut -join "`n") -match 'docs/roadmap\.md') { $ppOk++ }
     Assert-ExitCode -Case 'roadmap: an adopting project is seeded a template it can fill' -Expected 6 -Actual $ppOk
 
+    # --- the session package (-Section prompt) ------------------------------------------------
+    # The package answers what a coordinator used to be asked: session, model, effort, scope,
+    # policy, reading order, report shape, and the paste-ready prompt. Everything below is
+    # host-aware: run in the source repository the assertions bind the SHAPE, never this
+    # repository's own roadmap state, because this suite ships and the host's state is its own.
+
+    # The wrapper routes prompt to the engine exactly as it routes status and next, and the shape
+    # the surface takes -- full package or named refusal -- is decided by the same fact on both.
+    $pkgFgOut = Invoke-Forgeos -Arguments @('prompt')
+    $pkgFgCode = $LASTEXITCODE
+    $pkgEnOut = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusCmd -Section prompt 2>$null) -join "`n")
+    $pkgEnCode = $LASTEXITCODE
+    $pkgNextJson = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusCmd -Section next -Json 2>$null) -join "`n")
+    $pkOk = 0
+    if ($pkgFgOut -ceq $pkgEnOut) { $pkOk++ }
+    if ($pkgFgCode -eq $pkgEnCode) { $pkOk++ }
+    if ((Invoke-Forgeos -Arguments @('--help')) -match 'forgeos prompt') { $pkOk++ }
+    # The children's refusals arrive as deserialized ErrorRecords, not plain stderr text, and under
+    # Stop those terminate the suite -- so the preference is lowered around the two error-producing
+    # probes, exactly the way the adopt usage-error case already brackets its own.
+    $prevPkgEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusCmd -Section bogus 2>$null 1>$null
+    if ($LASTEXITCODE -eq 1) { $pkOk++ }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $forgeosCmd prompt -Apply 2>$null 1>$null
+    if ($LASTEXITCODE -eq 1) { $pkOk++ }
+    $ErrorActionPreference = $prevPkgEap
+    if ($pkgNextJson -match '"capability":\s*"unknown"') {
+        if ($pkgEnCode -eq 1 -and $pkgEnOut -cmatch 'cannot generate') { $pkOk++ }
+    } else {
+        if ($pkgEnCode -eq 0 -and $pkgEnOut -cmatch 'session prompt -- copy everything') { $pkOk++ }
+    }
+    Assert-ExitCode -Case 'prompt package: the wrapper routes and the surfaces agree' -Expected 6 -Actual $pkOk
+
+    # A fixture in the adopted shape, with every source the package requires: constraints from the
+    # template, a governance file from the template (closed, protected paths), a minimal ledger,
+    # the policy table, and a roadmap whose criteria table names one incomplete row.
+    $pp2 = Join-Path $toolRoot 'pp2'
+    New-Item -ItemType Directory -Path (Join-Path $pp2 'scripts\command') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $pp2 'scripts\lib') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $pp2 '.ai\context') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $pp2 'docs') -Force | Out-Null
+    Copy-Item -LiteralPath $statusCmd -Destination (Join-Path $pp2 'scripts\command\project-status.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\lib\session-policy.json') -Destination (Join-Path $pp2 'scripts\lib\session-policy.json') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\constraints-template.md') -Destination (Join-Path $pp2 '.ai\context\constraints.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\governance-template.json') -Destination (Join-Path $pp2 '.ai\context\governance.json') -Force
+    Set-Content -LiteralPath (Join-Path $pp2 '.ai\context\current-state.md') -Encoding UTF8 -Value @(
+        '# Current State', '', '## Position', '',
+        '- Now: building the first capability', '- Next: the roadmap names it', '- Blocked by: none')
+    function Set-Pp2Roadmap {
+        param([string]$Criterion)
+        Set-Content -LiteralPath (Join-Path $pp2 'docs\roadmap.md') -Encoding UTF8 -Value @(
+            '# Roadmap', '', '## M-1 - First capability', '',
+            '| # | Criterion | Met when | Status |', '| --- | --- | --- | --- |',
+            "| 1 | $Criterion | a test proves it | not built |")
+    }
+    Set-Pp2Roadmap -Criterion 'Harden the release workflow security'
+    $pp2Script = Join-Path $pp2 'scripts\command\project-status.ps1'
+    $pkg1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
+    $pkg1Code = $LASTEXITCODE
+    $pkOk = 0
+    if ($pkg1Code -eq 0) { $pkOk++ }
+    if ($pkg1 -cmatch 'Harden the release workflow security') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    name +pp2 - Harden') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    - \.ai/context/constraints\.md') { $pkOk++ }
+    if ($pkg1 -cmatch 'Final report -- include every item:') { $pkOk++ }
+    if ($pkg1 -cmatch 'Stop after the local commit and report\. Do not push\.') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: a named capability yields the full package' -Expected 6 -Actual $pkOk
+
+    # Model and effort come from scripts/lib/session-policy.json -- a data table, first match wins
+    # -- and changing the capability changes the category without touching a line of engine code.
+    $pkOk = 0
+    if ($pkg1 -cmatch '(?m)^    model +Fable$') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    effort +Ultracode$') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    category +public-release-history-ci-security$') { $pkOk++ }
+    Set-Pp2Roadmap -Criterion 'Update the adopted blueprint'
+    $pkg2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
+    if ($pkg2 -cmatch '(?m)^    model +a fast capable model$') { $pkOk++ }
+    if ($pkg2 -cmatch '(?m)^    effort +Medium$') { $pkOk++ }
+    if ($pkg2 -cmatch '(?m)^    category +adoption-update$') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: model and effort come from the policy table' -Expected 6 -Actual $pkOk
+
+    # Take the roadmap away and the package refuses BY NAME, in both surfaces, instead of writing
+    # a prompt around an invented capability.
+    $pp3 = Join-Path $toolRoot 'pp3'
+    New-Item -ItemType Directory -Path (Join-Path $pp3 'scripts\command') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $pp3 'scripts\lib') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $pp3 '.ai\context') -Force | Out-Null
+    Copy-Item -LiteralPath $statusCmd -Destination (Join-Path $pp3 'scripts\command\project-status.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\lib\session-policy.json') -Destination (Join-Path $pp3 'scripts\lib\session-policy.json') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'templates\governance-template.json') -Destination (Join-Path $pp3 '.ai\context\governance.json') -Force
+    Set-Content -LiteralPath (Join-Path $pp3 '.ai\context\current-state.md') -Encoding UTF8 -Value @(
+        '# Current State', '', '## Position', '',
+        '- Now: just adopted', '- Next: unknown', '- Blocked by: none')
+    $pp3Script = Join-Path $pp3 'scripts\command\project-status.ps1'
+    $ref1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp3Script -Section prompt 2>$null) -join "`n")
+    $ref1Code = $LASTEXITCODE
+    $ref2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp3Script -Section prompt -Json 2>$null) -join "`n")
+    $ref2Code = $LASTEXITCODE
+    $pkOk = 0
+    if ($ref1Code -eq 1) { $pkOk++ }
+    if ($ref1 -cmatch 'cannot generate') { $pkOk++ }
+    if ($ref1 -cmatch 'docs/roadmap\.md') { $pkOk++ }
+    if ($ref1 -cnotmatch 'session prompt -- copy') { $pkOk++ }
+    if ($ref2Code -eq 1) { $pkOk++ }
+    if ($ref2 -cmatch '"generated":\s*false') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: missing context is named, never invented' -Expected 6 -Actual $pkOk
+
+    # Governance is read and reflected, and the package authorizes nothing: the template gate is
+    # closed, so the package must say so, list the protected paths as forbidden, and send push,
+    # tag and deploy to the owner or to the project's own prohibitions -- never to "go ahead".
+    $pkOk = 0
+    if ($pkg2 -cmatch '(?m)^    codeAuthorized +false$') { $pkOk++ }
+    if ($pkg2 -cmatch '(?m)^    window needed +true$') { $pkOk++ }
+    if ($pkg2 -cmatch 'protected by \.ai/context/governance\.json') { $pkOk++ }
+    if ($pkg2 -cmatch 'A governance window is required before this slice may write') { $pkOk++ }
+    $pkgPushLine = @($pkg2 -split "`n" | Where-Object { $_ -cmatch '^    push +' }) | Select-Object -First 1
+    if ($pkgPushLine -and $pkgPushLine -cmatch 'refused|ask the owner') { $pkOk++ }
+    # Behind a closed gate not even the commit line may say "allowed": every one of the four
+    # policy rows must point at the owner or at the project's own prohibitions.
+    if ($pkg2 -cnotmatch '(?m)^    (commit|push|tag|deploy) +allowed') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: governance is reflected and nothing is authorized' -Expected 6 -Actual $pkOk
+
+    # The package carries nothing the host did not choose: its Do-not entries trace to the host's
+    # own constraints or the shipped generator, the fixture output never names this repository's
+    # root, and neither the output nor the policy table carries a session instruction or
+    # attribution language.
+    $pkOk = 0
+    if ((Get-ForeignCount -Lines ($pkg2 -split "`n") -ConstrPath (Join-Path $pp2 '.ai\context\constraints.md') -GenPath $pp2Script) -eq 0) { $pkOk++ }
+    if ($pkg2 -cnotmatch 'official ForgeOS / Blueprint') { $pkOk++ }
+    if (-not $pkg2.Contains($repoRoot)) { $pkOk++ }
+    if ($pkg2 -cnotmatch 'Co-Authored-By') { $pkOk++ }
+    $polText = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts\lib\session-policy.json') -Raw -Encoding UTF8
+    if ($polText -notmatch 'generated by|built with|co-authored') { $pkOk++ }
+    if ($ref2 -cmatch '"generatedFrom":\s*"repository files only"') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: nothing the host did not choose leaks into it' -Expected 6 -Actual $pkOk
+
+    # The JSON contract: its own schema id, the session fields a caller needs, and the three
+    # safety flags false -- the package can recommend anything and authorize nothing.
+    $pkg3 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt -Json 2>$null) -join "`n")
+    $pkg3Code = $LASTEXITCODE
+    $pkOk = 0
+    if ($pkg3Code -eq 0) { $pkOk++ }
+    if ($pkg3 -cmatch '"schema":\s*"forgeos\.project-prompt/1"') { $pkOk++ }
+    if ($pkg3 -cmatch '"generated":\s*true') { $pkOk++ }
+    if ($pkg3 -cmatch '"newSession"' -and $pkg3 -cmatch '"model"' -and $pkg3 -cmatch '"effort"') { $pkOk++ }
+    if ($pkg3 -cmatch '"readFirst"' -and $pkg3 -cmatch '"reportChecklist"') { $pkOk++ }
+    if (([regex]::Matches($pkg3, '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)":\s*false')).Count -eq 3) { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: the JSON carries the contract and the safety flags are false' -Expected 6 -Actual $pkOk
+
+    # The policy table's one-category-per-line contract is enforced, on both shells: a reformatted
+    # table -- an editor's format-on-save is enough -- once made the line-wise POSIX parser pick a
+    # category with an empty model and exit 0 while this shell answered correctly. Failing OPEN on
+    # the one file this feature tells projects to edit is the exact inventing the package refuses,
+    # so malformed means a named refusal, identically, everywhere.
+    Set-Content -LiteralPath (Join-Path $pp2 'scripts\lib\session-policy.json') -Encoding UTF8 -Value @(
+        '{', '  "schema": "forgeos.session-policy/1",', '  "categories": [', '    {',
+        '      "key": "implementation-default",', '      "model": "Fable",',
+        '      "effort": "Max",', '      "reason": "x"', '    }', '  ]', '}')
+    $pkg4 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
+    $pkg4Code = $LASTEXITCODE
+    $pkg5 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt -Json 2>$null) -join "`n")
+    $pkg5Code = $LASTEXITCODE
+    $pkOk = 0
+    if ($pkg4Code -eq 1) { $pkOk++ }
+    if ($pkg4 -cmatch 'cannot generate') { $pkOk++ }
+    if ($pkg4 -cmatch 'scripts/lib/session-policy\.json') { $pkOk++ }
+    if ($pkg5Code -eq 1 -and $pkg5 -cmatch '"generated":\s*false') { $pkOk++ }
+    Assert-ExitCode -Case 'prompt package: a reformatted policy table refuses instead of failing open' -Expected 4 -Actual $pkOk
+
     # --- the POSIX installer, asserted from the file ------------------------------------------
     # This half cannot RUN a bash installer, and pretending otherwise would be the fake parity the
     # contributing guide forbids. The POSIX half runs it end to end; this one asserts the same

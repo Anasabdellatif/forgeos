@@ -23,7 +23,7 @@ answer *what do I carry, and what changed since* without fetching anything.
 grep -m1 '"version"' blueprint.version
 
 # One entry
-python3 -c "import json;d=json.load(open('blueprint.version'));print(d['changelog']['1.15.30'])"
+python3 -c "import json;d=json.load(open('blueprint.version'));print(d['changelog']['1.15.31'])"
 
 # Every version, newest first
 python3 -c "import json;d=json.load(open('blueprint.version'));[print(v) for v in sorted(d['changelog'], key=lambda s:[int(p) for p in s.split('.')], reverse=True)]"

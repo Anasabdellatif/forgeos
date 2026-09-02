@@ -14,7 +14,7 @@ serious codebase already assumes: a durable project memory, write permissions a 
 deliberately, and validation that has to produce evidence before anything may be called done.
 The rules are not advice in a document — where it matters, a machine enforces them.
 
-Current version: **`1.15.30`** · MIT · Windows PowerShell 5.1 and POSIX bash
+Current version: **`1.15.31`** · MIT · Windows PowerShell 5.1 and POSIX bash
 
 **[Quick start](#quick-start)** · **[Commands](#commands)** · **[What is
 enforced](#what-is-enforced)** · **[Roadmap](#roadmap)** · **[useforgeos.com](https://useforgeos.com)**
@@ -71,31 +71,31 @@ refuses that command shape, and it will not be added.
 ### 1. From the release artifact (recommended)
 
 Download both files from the [latest release](https://github.com/Anasabdellatif/forgeos/releases/latest)
-— for `v1.15.30` that is
-[`forgeos-1.15.30.tar.gz`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.15.30/forgeos-1.15.30.tar.gz)
+— for `v1.15.31` that is
+[`forgeos-1.15.31.tar.gz`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.15.31/forgeos-1.15.31.tar.gz)
 and
-[`forgeos-1.15.30.tar.gz.sha256`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.15.30/forgeos-1.15.30.tar.gz.sha256).
+[`forgeos-1.15.31.tar.gz.sha256`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.15.31/forgeos-1.15.31.tar.gz.sha256).
 
 POSIX:
 
 ```bash
-sha256sum -c forgeos-1.15.30.tar.gz.sha256     # verify before you trust it
-tar -xzf forgeos-1.15.30.tar.gz
+sha256sum -c forgeos-1.15.31.tar.gz.sha256     # verify before you trust it
+tar -xzf forgeos-1.15.31.tar.gz
 
 # dry run first — it writes nothing and reports what it would do
-bash forgeos-1.15.30/scripts/blueprint/sync-blueprint.sh --source forgeos-1.15.30 --target <project>
+bash forgeos-1.15.31/scripts/blueprint/sync-blueprint.sh --source forgeos-1.15.31 --target <project>
 # then apply
-bash forgeos-1.15.30/scripts/blueprint/sync-blueprint.sh --source forgeos-1.15.30 --target <project> --apply
+bash forgeos-1.15.31/scripts/blueprint/sync-blueprint.sh --source forgeos-1.15.31 --target <project> --apply
 ```
 
 Windows PowerShell:
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 forgeos-1.15.30.tar.gz).Hash   # compare with the .sha256 file
-tar -xzf forgeos-1.15.30.tar.gz
+(Get-FileHash -Algorithm SHA256 forgeos-1.15.31.tar.gz).Hash   # compare with the .sha256 file
+tar -xzf forgeos-1.15.31.tar.gz
 
-powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.15.30/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.15.30 -Target <project>
-powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.15.30/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.15.30 -Target <project> -Apply
+powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.15.31/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.15.31 -Target <project>
+powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.15.31/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.15.31 -Target <project> -Apply
 ```
 
 The archive is a **sync source, not a product bundle**: it carries what sync copies plus the
@@ -143,6 +143,7 @@ exposed.
 | --- | --- |
 | `status` | Where the project is, read from its own files — `--json` for machines |
 | `next` | The next safe slice, the governance window it would need, a validation plan, and a copyable implementation prompt |
+| `prompt` | The complete next-session package: session name, model, effort, scope, policy, reading order, report checklist, and a paste-ready prompt — it refuses and names what is missing rather than invent |
 | `doctor` | Whether this installation can run: nine prerequisite rows — shell, JSON reader, git, hook wiring, line endings |
 | `version` | Which ForgeOS this is; a release is reported unknown rather than inferred from a tag |
 | `adopt --target <path>` | Bring the blueprint into a project — dry run first, `--apply` to write |
@@ -185,7 +186,7 @@ and in CI:
 | `check-links` | Any referenced repository path does not resolve, or a file that lands in an adopting project references one that does not travel with it |
 | `check-blueprint-version` | The version file is missing, unparseable, or the synced set has drifted |
 | `scan-secrets --scan-tree` | Ten secret patterns across every tracked file. Reports file, line, and pattern name — **never the value** |
-| `selftest` | The safety hooks themselves stop blocking what they must block — 202 cases per shell |
+| `selftest` | The safety hooks themselves stop blocking what they must block — 210 cases per shell |
 | `check-public-surface` | **This page** disagrees with what the tools report: a stated version, a check count, a claim the repository contradicts |
 | `check-placeholders` | *Informational:* an adoption-readiness score, weighted by impact |
 | `check-context-budget` | *Informational:* the always-loaded context against its recorded budget, attributed to its owner |
@@ -196,9 +197,9 @@ Every number on this page is either checked mechanically or printed by a command
 | Claim | How to verify it yourself |
 | --- | --- |
 | Eleven checks, eight of them gating | `bash scripts/validation/check-all.sh` — the summary names each row and its class |
-| 202 self-test cases, identical on both shells | The same run prints the total; CI's parity job compares the two lists case by case |
+| 210 self-test cases, identical on both shells | The same run prints the total; CI's parity job compares the two lists case by case |
 | 144 policy controls | `bash scripts/validation/check-policy.sh` |
-| Every referenced path resolves | `bash scripts/validation/check-links.sh` — 517 references across 134 files, 0 broken, 0 unportable |
+| Every referenced path resolves | `bash scripts/validation/check-links.sh` — 519 references across 134 files, 0 broken, 0 unportable |
 | This page agrees with the repository | `bash scripts/validation/check-public-surface.sh --fail-on-drift` |
 | Eight CI jobs, green on the pushed commit | `.github/workflows/validate.yml`, and the Actions tab |
 | The release artifact is what it claims | `sha256sum -c` against the published `.sha256`, then `tar -tzf` to read it before extracting |
@@ -246,8 +247,8 @@ repository's own answers or release tooling — and the same tag builds a byte-i
 Windows and on POSIX. Verify before use, always:
 
 ```bash
-sha256sum -c forgeos-1.15.30.tar.gz.sha256
-tar -tzf forgeos-1.15.30.tar.gz | head
+sha256sum -c forgeos-1.15.31.tar.gz.sha256
+tar -tzf forgeos-1.15.31.tar.gz | head
 ```
 
 The changelog lives in `blueprint.version`, one prose entry per version;

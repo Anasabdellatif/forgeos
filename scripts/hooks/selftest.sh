@@ -2212,6 +2212,140 @@ grep -qE 'M-2[0-9]|Installability channels|Project Command Center' "$RM_TPL" || 
 grep -q 'docs/roadmap.md' "$pp_root/out.txt" && ok=$((ok + 1))
 assert_code 'roadmap: an adopting project is seeded a template it can fill' 6 "$ok"
 
+# --- the session package (--section prompt) -------------------------------------------------------
+# The package answers what a coordinator used to be asked: session, model, effort, scope, policy,
+# reading order, report shape, and the paste-ready prompt. Everything below is host-aware: run in
+# the source repository the assertions bind the SHAPE, never this repository's own roadmap state,
+# because this suite ships and the host's state is the host's business.
+
+# The wrapper routes prompt to the engine exactly as it routes status and next, and the shape the
+# surface takes -- full package or named refusal -- is decided by the same fact on both surfaces.
+pkg_fg_out="$(bash "$FORGEOS_CMD" prompt 2>/dev/null)"; pkg_fg_code=$?
+pkg_en_out="$(bash "$STATUS_CMD" --section prompt 2>/dev/null)"; pkg_en_code=$?
+pkg_next_json="$(bash "$STATUS_CMD" --section next --json 2>/dev/null)"
+ok=0
+[ "$pkg_fg_out" = "$pkg_en_out" ] && ok=$((ok + 1))
+[ "$pkg_fg_code" -eq "$pkg_en_code" ] && ok=$((ok + 1))
+bash "$FORGEOS_CMD" --help 2>/dev/null | grep -q 'forgeos prompt' && ok=$((ok + 1))
+bash "$STATUS_CMD" --section bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok=$((ok + 1))
+bash "$FORGEOS_CMD" prompt --apply >/dev/null 2>&1; [ $? -eq 1 ] && ok=$((ok + 1))
+if printf '%s' "$pkg_next_json" | grep -q '"capability": "unknown"'; then
+  [ "$pkg_en_code" -eq 1 ] && printf '%s' "$pkg_en_out" | grep -q 'cannot generate' && ok=$((ok + 1))
+else
+  [ "$pkg_en_code" -eq 0 ] && printf '%s' "$pkg_en_out" | grep -q 'session prompt -- copy everything' && ok=$((ok + 1))
+fi
+assert_code 'prompt package: the wrapper routes and the surfaces agree' 6 "$ok"
+
+# A fixture in the adopted shape, with every source the package requires: constraints from the
+# template, a governance file from the template (closed, protected paths), a minimal ledger, the
+# policy table, and a roadmap whose criteria table names one incomplete row.
+pp2="$tmp_root/pp2"
+mkdir -p "$pp2/scripts/command" "$pp2/scripts/lib" "$pp2/.ai/context" "$pp2/docs"
+cp "$STATUS_CMD" "$pp2/scripts/command/project-status.sh"
+cp "$repo_root/scripts/lib/session-policy.json" "$pp2/scripts/lib/session-policy.json"
+cp "$repo_root/templates/constraints-template.md" "$pp2/.ai/context/constraints.md"
+cp "$repo_root/templates/governance-template.json" "$pp2/.ai/context/governance.json"
+printf '# Current State\n\n## Position\n\n- Now: building the first capability\n- Next: the roadmap names it\n- Blocked by: none\n' > "$pp2/.ai/context/current-state.md"
+pp2_roadmap() {   # pp2_roadmap <criterion text>
+  printf '# Roadmap\n\n## M-1 - First capability\n\n| # | Criterion | Met when | Status |\n| --- | --- | --- | --- |\n| 1 | %s | a test proves it | not built |\n' "$1" > "$pp2/docs/roadmap.md"
+}
+pp2_roadmap 'Harden the release workflow security'
+bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg1.txt" 2>&1; pp2_code=$?
+ok=0
+[ "$pp2_code" -eq 0 ] && ok=$((ok + 1))
+grep -q 'Harden the release workflow security' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    name +pp2 - Harden' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    - \.ai/context/constraints\.md' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -q 'Final report -- include every item:' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -q 'Stop after the local commit and report. Do not push.' "$pp2/pkg1.txt" && ok=$((ok + 1))
+assert_code 'prompt package: a named capability yields the full package' 6 "$ok"
+
+# Model and effort come from scripts/lib/session-policy.json -- a data table, first match wins --
+# and changing the capability changes the category without touching a line of engine code.
+ok=0
+grep -qE '^    model +Fable$' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    effort +Ultracode$' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    category +public-release-history-ci-security$' "$pp2/pkg1.txt" && ok=$((ok + 1))
+pp2_roadmap 'Update the adopted blueprint'
+bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg2.txt" 2>&1
+grep -qE '^    model +a fast capable model$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -qE '^    effort +Medium$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -qE '^    category +adoption-update$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+assert_code 'prompt package: model and effort come from the policy table' 6 "$ok"
+
+# Take the roadmap away and the package refuses BY NAME, in both surfaces, instead of writing a
+# prompt around an invented capability.
+pp3="$tmp_root/pp3"
+mkdir -p "$pp3/scripts/command" "$pp3/scripts/lib" "$pp3/.ai/context"
+cp "$STATUS_CMD" "$pp3/scripts/command/project-status.sh"
+cp "$repo_root/scripts/lib/session-policy.json" "$pp3/scripts/lib/session-policy.json"
+cp "$repo_root/templates/governance-template.json" "$pp3/.ai/context/governance.json"
+printf '# Current State\n\n## Position\n\n- Now: just adopted\n- Next: unknown\n- Blocked by: none\n' > "$pp3/.ai/context/current-state.md"
+bash "$pp3/scripts/command/project-status.sh" --section prompt > "$pp3/ref1.txt" 2>&1; pp3_code=$?
+bash "$pp3/scripts/command/project-status.sh" --section prompt --json > "$pp3/ref2.txt" 2>&1; pp3_json_code=$?
+ok=0
+[ "$pp3_code" -eq 1 ] && ok=$((ok + 1))
+grep -q 'cannot generate' "$pp3/ref1.txt" && ok=$((ok + 1))
+grep -q 'docs/roadmap.md' "$pp3/ref1.txt" && ok=$((ok + 1))
+grep -q 'session prompt -- copy' "$pp3/ref1.txt" || ok=$((ok + 1))
+[ "$pp3_json_code" -eq 1 ] && ok=$((ok + 1))
+grep -q '"generated": false' "$pp3/ref2.txt" && ok=$((ok + 1))
+assert_code 'prompt package: missing context is named, never invented' 6 "$ok"
+
+# Governance is read and reflected, and the package authorizes nothing: the template gate is
+# closed, so the package must say so, list the protected paths as forbidden, and send push, tag
+# and deploy to the owner or to the project's own prohibitions -- never to "go ahead".
+ok=0
+grep -qE '^    codeAuthorized +false$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -qE '^    window needed +true$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -q 'protected by .ai/context/governance.json' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -q 'A governance window is required before this slice may write' "$pp2/pkg2.txt" && ok=$((ok + 1))
+pkg_push_line="$(grep -E '^    push +' "$pp2/pkg2.txt" | head -1)"
+printf '%s' "$pkg_push_line" | grep -qE 'refused|ask the owner' && ok=$((ok + 1))
+# Behind a closed gate not even the commit line may say "allowed": every one of the four policy
+# rows must point at the owner or at the project's own prohibitions.
+grep -qE '^    (commit|push|tag|deploy) +allowed' "$pp2/pkg2.txt" || ok=$((ok + 1))
+assert_code 'prompt package: governance is reflected and nothing is authorized' 6 "$ok"
+
+# The package carries nothing the host did not choose: its Do-not entries trace to the host's own
+# constraints or the shipped generator, the fixture output never names this repository's root, and
+# neither the output nor the policy table carries a session instruction or attribution language.
+ok=0
+[ "$(pp_foreign "$pp2/pkg2.txt" "$pp2/.ai/context/constraints.md" "$pp2/scripts/command/project-status.sh")" -eq 0 ] && ok=$((ok + 1))
+grep -qF 'official ForgeOS / Blueprint' "$pp2/pkg2.txt" || ok=$((ok + 1))
+grep -qF "$repo_root" "$pp2/pkg2.txt" || ok=$((ok + 1))
+grep -q 'Co-Authored-By' "$pp2/pkg2.txt" || ok=$((ok + 1))
+grep -qiE 'generated by|built with|co-authored' "$repo_root/scripts/lib/session-policy.json" || ok=$((ok + 1))
+grep -q '"generatedFrom": "repository files only"' "$pp3/ref2.txt" && ok=$((ok + 1))
+assert_code 'prompt package: nothing the host did not choose leaks into it' 6 "$ok"
+
+# The JSON contract: its own schema id, the session fields a caller needs, and the three safety
+# flags false -- the package can recommend anything and authorize nothing.
+bash "$pp2/scripts/command/project-status.sh" --section prompt --json > "$pp2/pkg3.json" 2>&1; pp2_json_code=$?
+ok=0
+[ "$pp2_json_code" -eq 0 ] && ok=$((ok + 1))
+grep -q '"schema": "forgeos.project-prompt/1"' "$pp2/pkg3.json" && ok=$((ok + 1))
+grep -q '"generated": true' "$pp2/pkg3.json" && ok=$((ok + 1))
+grep -q '"newSession"' "$pp2/pkg3.json" && grep -q '"model"' "$pp2/pkg3.json" && grep -q '"effort"' "$pp2/pkg3.json" && ok=$((ok + 1))
+grep -q '"readFirst"' "$pp2/pkg3.json" && grep -q '"reportChecklist"' "$pp2/pkg3.json" && ok=$((ok + 1))
+[ "$(grep -cE '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)": false' "$pp2/pkg3.json")" -eq 3 ] && ok=$((ok + 1))
+assert_code 'prompt package: the JSON carries the contract and the safety flags are false' 6 "$ok"
+
+# The policy table's one-category-per-line contract is enforced, on both shells: a reformatted
+# table -- an editor's format-on-save is enough -- once made the line-wise POSIX parser pick a
+# category with an empty model and exit 0 while the other shell answered correctly. Failing OPEN
+# on the one file this feature tells projects to edit is the exact inventing the package refuses,
+# so malformed means a named refusal, identically, everywhere.
+printf '{\n  "schema": "forgeos.session-policy/1",\n  "categories": [\n    {\n      "key": "implementation-default",\n      "model": "Fable",\n      "effort": "Max",\n      "reason": "x"\n    }\n  ]\n}\n' > "$pp2/scripts/lib/session-policy.json"
+bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg4.txt" 2>&1; pp2_ref_code=$?
+bash "$pp2/scripts/command/project-status.sh" --section prompt --json > "$pp2/pkg5.json" 2>&1; pp2_ref_json=$?
+ok=0
+[ "$pp2_ref_code" -eq 1 ] && ok=$((ok + 1))
+grep -q 'cannot generate' "$pp2/pkg4.txt" && ok=$((ok + 1))
+grep -q 'scripts/lib/session-policy.json' "$pp2/pkg4.txt" && ok=$((ok + 1))
+[ "$pp2_ref_json" -eq 1 ] && grep -q '"generated": false' "$pp2/pkg5.json" && ok=$((ok + 1))
+assert_code 'prompt package: a reformatted policy table refuses instead of failing open' 4 "$ok"
+
 # --- the POSIX installer, run for real ------------------------------------------------------------
 # This half CAN run it, so it does. The Windows half asserts the same contract from the file, which
 # is the honest split: neither pretends to exercise the other's platform.

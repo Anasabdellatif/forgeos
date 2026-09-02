@@ -215,19 +215,19 @@ driven through the full loop, with the findings written up under the existing an
 
 Declared criteria:
 
-| # | Criterion |
-| --- | --- |
-| 1 | Project discovery from existing files, not from an interview alone |
-| 2 | Requirements reconstructed into `docs/product/` from what the code and the owner actually say |
-| 3 | Architecture documented in `docs/architecture/` and matching the code |
-| 4 | A programmer specification a new contributor can implement from |
-| 5 | Data model documented in `docs/domains/` |
-| 6 | Work delivered as small implementation slices, each with acceptance criteria |
-| 7 | Completion recorded per slice, with evidence, in the task record |
-| 8 | **No context loss between sessions** — a new session resumes from files alone |
-| 9 | The next prompt generated from repository state, not composed by hand |
-| 10 | The full loop `/start-task → /implement → /review → /finish-task` run end to end on a real slice |
-| 11 | The three never-dispatched roles exercised: `product-analyst`, `data-reviewer`, `release-manager` |
+| # | Criterion | Met when | Status |
+| --- | --- | --- | --- |
+| 1 | Project discovery from existing files, not from an interview alone | The context files are filled from the codebase, with evidence | not built |
+| 2 | Requirements reconstructed into `docs/product/` from what the code and the owner actually say | The product docs match what the owner confirms | not built |
+| 3 | Architecture documented in `docs/architecture/` and matching the code | A reviewer finds no contradiction between the two | not built |
+| 4 | A programmer specification a new contributor can implement from | A slice is implemented from the spec alone | not built |
+| 5 | Data model documented in `docs/domains/` | The documented model matches the schema | not built |
+| 6 | Work delivered as small implementation slices, each with acceptance criteria | Three slices closed with criteria checked individually | not built |
+| 7 | Completion recorded per slice, with evidence, in the task record | The closure gate passes on real records | not built |
+| 8 | **No context loss between sessions** — a new session resumes from files alone | A cold session continues correctly without recollection | not built |
+| 9 | The next prompt generated from repository state, not composed by hand | `forgeos prompt` produces the session package that starts a real slice | partial |
+| 10 | The full loop `/start-task → /implement → /review → /finish-task` run end to end on a real slice | Every stage leaves its record | not built |
+| 11 | The three never-dispatched roles exercised: `product-analyst`, `data-reviewer`, `release-manager` | Each produces its artifact on a real slice | not built |
 
 **Definition of done for the field adoption:** three consecutive real slices are opened, planned,
 implemented, reviewed and closed through the loop, in separate sessions, with every session

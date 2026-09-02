@@ -3,8 +3,8 @@
     The local ForgeOS command surface. Windows counterpart of forgeos.sh.
 
 .DESCRIPTION
-    A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status` and `next` describe the PROJECT, so
-    they route to project-status and add nothing: the reading, the schema and the safety flags all
+    A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next` and `prompt` describe the
+    PROJECT, so they route to project-status and add nothing: the reading, the schema and the flags
     belong to that one command, and a second place that read the same files would be a second
     answer waiting to disagree. `doctor` and `version` describe the INSTALLATION, so they are
     implemented here -- neither duplicates the engine, and neither could route to a command that
@@ -84,6 +84,9 @@ function Show-Usage {
         'Usage:',
         '  forgeos status  [--json]   where this project is, read from its own files',
         '  forgeos next    [--json]   what the next safe thing to do is',
+        '  forgeos prompt  [--json]   the complete package for the next work session: session, model,',
+        '                             effort, scope, policy, and a paste-ready prompt. Refuses to invent:',
+        '                             missing context is named instead of guessed.',
         '  forgeos doctor  [--json]   whether this ForgeOS installation can run',
         '  forgeos version [--json]   which ForgeOS this is, and where it sits',
         '  forgeos adopt  -Target <path> [-Apply] [-Json]',
@@ -137,7 +140,7 @@ if (@($Rest | Where-Object { $_ }).Count -gt 0) {
 }
 
 switch ($Command) {
-    { $_ -in @('status', 'next') } {
+    { $_ -in @('status', 'next', 'prompt') } {
         if (-not (Test-Path -LiteralPath $statusCmd)) {
             [Console]::Error.WriteLine("Cannot run: project-status.ps1 is missing from $here")
             [Console]::Error.WriteLine('Run "forgeos doctor" for the full picture.')
@@ -146,6 +149,7 @@ switch ($Command) {
         $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $statusCmd)
         if ($Json) { $argv += '-Json' }
         if ($Command -eq 'next') { $argv += @('-Section', 'next') }
+        if ($Command -eq 'prompt') { $argv += @('-Section', 'prompt') }
         & powershell.exe @argv
         exit $LASTEXITCODE
     }

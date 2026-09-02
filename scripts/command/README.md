@@ -37,15 +37,16 @@ gained a write path would have to change them, and a self-test case fails if any
 
 | Command | Purpose | Status |
 | --- | --- | --- |
-| `forgeos` | The local command surface: `status`, `next`, `doctor`, `version`, `adopt`, `update` | **implemented** — complete |
+| `forgeos` | The local command surface: `status`, `next`, `prompt`, `doctor`, `version`, `adopt`, `update` | **implemented** — complete |
 | `project-status` | Report where the project is, from files | **implemented** |
 | `project-map` | The system as it is: ten documentation and state surfaces | **implemented**, inside `project-status` as the `map` object |
 | `next-slice` | The next incomplete capability, and whether anything blocks it | **implemented**, as `nextRecommendation` |
 | `governance-window` | Draft the window that slice would need | **implemented**, as `governanceDraft` — a draft only |
 | `validation-plan` | What must pass before that slice is done | **implemented**, as `validationPlan` |
 | `implementation-prompt` | A copy-paste prompt generated from repository state | **implemented**, as `generatedPrompt` |
+| `session-package` | Everything a coordinator would be asked for the next session: session, model, effort, scope, policy, reading order, report shape, and a paste-ready prompt | **implemented**, as `forgeos prompt` / `--section prompt` |
 
-All six are one command today. They are named separately because they answer separate questions and
+All seven are one command today. They are named separately because they answer separate questions and
 may become separate entry points; splitting them later changes no field.
 
 ## The `forgeos` command
@@ -53,7 +54,7 @@ may become separate entry points; splitting them later changes no field.
 `forgeos` is the surface a person types, and it splits along one line: **a command about the
 project routes; a command about the installation does not.**
 
-`status` and `next` describe the **project**, so they route to `project-status` and add nothing —
+`status`, `next` and `prompt` describe the **project**, so they route to `project-status` and add nothing —
 the reading, the schema and the safety flags stay in one place. A wrapper that reformatted would be
 a second answer waiting to disagree with the first, and a self-test case asserts each routed command
 is byte-identical to the engine it routes to.
@@ -70,6 +71,7 @@ here that can write, and only when `--apply` is typed.
 ```bash
 bash scripts/command/forgeos.sh status            # where this project is
 bash scripts/command/forgeos.sh next --json       # what to do next, machine-readable
+bash scripts/command/forgeos.sh prompt            # the complete next-session package
 bash scripts/command/forgeos.sh doctor            # whether this installation can run
 bash scripts/command/forgeos.sh version           # which ForgeOS this is
 bash scripts/command/forgeos.sh adopt  --target <path>   # first-time adoption   (dry run)
@@ -94,18 +96,34 @@ which checksum, which uninstall — and belongs to the installability work, not 
 bash scripts/command/project-status.sh                    # human-readable, to stdout
 bash scripts/command/project-status.sh --json             # JSON only, to stdout
 bash scripts/command/project-status.sh --section next     # the recommendation half alone
+bash scripts/command/project-status.sh --section prompt   # the complete next-session package
 ```
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Json
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Section next
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Section prompt
 ```
 
 `--section next` exists so the wrapper can ask for a subset instead of re-parsing this command's
 output. One emitter, one place. The subset carries its **own** schema id,
 `forgeos.project-next/1`, because it is a different document: a consumer that trusted
 `forgeos.project-status/1` and then found half the keys missing would be right to complain.
+
+`--section prompt` builds the **session package** on top of the same facts: the recommendation, a
+same-or-new-session decision read from the work in flight, a session name, the model and effort the
+policy table recommends (`scripts/lib/session-policy.json` — a data file, first matching category
+wins, the last entry is the default; edit it to name your own tools), the governance verdict, an
+allowed/forbidden scope read from the governance file, a commit/push/tag/deploy policy in which
+push, tag and deploy can only ever say *refused* or *ask the owner* and commit says *allowed,
+local only* solely while the governance gate is open, a reading order of files that exist, the
+final-report
+checklist, and a paste-ready prompt carrying all of it. Its subset schema is
+`forgeos.project-prompt/1`. It is the one section that can refuse: when the roadmap names no
+incomplete row, or the ledger, governance file, or policy table is missing, it exits 1 and names
+each missing source and the way to supply it — a package with invented facts would be worse than
+no package.
 
 **`--json` puts JSON on stdout and nothing else.** Any human commentary goes to stderr. A caller
 that pipes stdout into a parser must never have to strip a banner first — the rule the packaging

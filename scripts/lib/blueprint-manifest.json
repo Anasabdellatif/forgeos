@@ -191,6 +191,7 @@
     "scripts/install/install-forgeos.ps1",
     "scripts/install/install-forgeos.sh",
     "scripts/lib/blueprint-manifest.json",
+    "scripts/lib/session-policy.json",
     "scripts/release/README.md",
     "scripts/release/build-artifact.ps1",
     "scripts/release/build-artifact.sh",

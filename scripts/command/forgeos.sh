@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The local ForgeOS command surface. POSIX counterpart of forgeos.ps1.
 #
-# A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status` and `next` describe the PROJECT, so they
-# route to project-status and add nothing: the reading, the schema and the safety flags all belong to
+# A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next` and `prompt` describe the PROJECT,
+# so they route to project-status and add nothing: the reading, the schema and the flags belong to
 # that one command, and a second place that read the same files would be a second answer waiting to
 # disagree. `doctor` and `version` describe the INSTALLATION, so they are implemented here -- neither
 # duplicates the engine, and neither could route to a command that may itself be the missing piece.
@@ -16,7 +16,7 @@
 # refuses a target that has never adopted. Nothing here touches the network: the source is always
 # this checkout, so there is no channel, no fetch and no version discovery.
 #
-# Usage: forgeos.sh <status|next|doctor|version|adopt|update> [--json]
+# Usage: forgeos.sh <status|next|prompt|doctor|version|adopt|update> [--json]
 # Exit 0 reported; 1 usage error or could not run; 2 is reserved by the house convention for a gate
 # refusal and no command here can produce one.
 
@@ -37,6 +37,9 @@ forgeos -- the local ForgeOS command surface
 Usage:
   forgeos status  [--json]   where this project is, read from its own files
   forgeos next    [--json]   what the next safe thing to do is
+  forgeos prompt  [--json]   the complete package for the next work session: session, model,
+                             effort, scope, policy, and a paste-ready prompt. Refuses to invent:
+                             missing context is named instead of guessed.
   forgeos doctor  [--json]   whether this ForgeOS installation can run
   forgeos version [--json]   which ForgeOS this is, and where it sits
   forgeos adopt  --target <path> [--apply] [--json]
@@ -81,7 +84,7 @@ if [ "$CMD" != 'adopt' ] && [ "$CMD" != 'update' ]; then
 fi
 
 case "$CMD" in
-  status|next)
+  status|next|prompt)
     [ -f "$STATUS" ] || {
       echo "Cannot run: project-status.sh is missing from $HERE" >&2
       echo 'Run "forgeos doctor" for the full picture.' >&2
@@ -90,6 +93,7 @@ case "$CMD" in
     args=()
     [ "$JSON" -eq 1 ] && args+=('--json')
     [ "$CMD" = 'next' ] && args+=('--section' 'next')
+    [ "$CMD" = 'prompt' ] && args+=('--section' 'prompt')
     bash "$STATUS" ${args[@]+"${args[@]}"}
     exit $?
     ;;

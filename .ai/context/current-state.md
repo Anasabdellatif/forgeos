@@ -5,17 +5,20 @@ from history. Refresh at every close, handoff, and final report. Rules: `.ai/con
 
 ## Position
 
-- Now: idle — v1.15.30. This repository is the public home of ForgeOS, launched at v1.15.29 as
-  a verified snapshot with a fresh history by explicit owner decision, while development
-  continues privately. All 11 validation rows and 202 self-test cases per shell are green.
-- Next: M-23 — driving a real project end to end through the full work loop, and the field
-  reports that come out of it. Package-manager channels stay deferred with their blockers named.
-- Blocked by: none. Open questions 002 (macOS CI) and 003 (npm name) gate two channels.
+- Now: idle — v1.15.31. This repository is the public home of ForgeOS. The release adds
+  `forgeos prompt`, the session package: session, model, effort, scope, policy, reading order,
+  report checklist and a paste-ready prompt, all read from project files, with model and effort
+  from the adopter-editable `scripts/lib/session-policy.json` table. 210 self-test cases per
+  shell, all 11 validation rows green.
+- Next: M-23 — driving a real project end to end through the full work loop, now startable from
+  `forgeos prompt` output. Package-manager channels stay deferred with their blockers named.
+- Blocked by: none
+- Watch: open questions 002 (macOS CI) and 003 (npm name) gate two distribution channels.
 
 ## Last known good
 
-- Commit: the current HEAD — this history begins at the public launch.
-- Validation: 11 rows green, 2026-08-31; selftest 202/202 in both shells; release 14/14.
+- Commit: the release commit for v1.15.31 — this history begins at the public launch.
+- Validation: 11 rows green, 2026-09-02; selftest 210/210 in both shells; release 14/14.
 - Lesson: an unchecked public page drifts first — which is why `check-public-surface` gates.
 
 ## Gates

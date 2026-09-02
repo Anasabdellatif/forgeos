@@ -18,7 +18,7 @@ it in. Available as `.ps1` and `.sh` with identical behavior.
 | `check-public-surface` | The blueprint's own public launch page against what the tools report — the stated version, the check-row counts, the proof sections, every numeric claim the tools measure -- self-test cases, policy controls, link counts -- handed to it by `check-all` through `--measured`, whether every public trust file is DECLARED source-only rather than staying home by accident, and whether any could reach an adopting project. Audits the source repository only; an adopted project is reported as not applicable | **yes** — `check-all` runs it with `--fail-on-drift` |
 | `check-selftest-parity` | The two hook self-tests ran the same cases, in the same order. CI only; it compares their published output | yes, in CI |
 
-`scripts/hooks/selftest` is also run by `check-all` as a gating check: **202 cases** covering
+`scripts/hooks/selftest` is also run by `check-all` as a gating check: **210 cases** covering
 `guard-bash`, `scan-secrets`, `guard-discovery`, `guard-governance`, the discovery gate on `new-task`, the closure
 record written by `finish-task`, profile role evidence, the public-surface audit, and the adoption and context tooling --
 `sync-blueprint` and `build-context` -- identical in both shells.

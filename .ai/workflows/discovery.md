@@ -35,7 +35,7 @@ Also on request, to revisit one phase after a pivot: `/discovery --phase 3`.
    moving on.
 6. Record anything the user does not know in `.ai/memory/open-questions.md` — the single register —
    with an owner and what it blocks. Never resolve it silently.
-7. Delegate Phase 5 to the `architect` subagent. Diagrams follow `.ai/rules/diagrams.md`.
+7. Complete Phase 5 in the current agent or hand it to a human architect. No autonomous subagent delegation — `core.md` Rule #9. Diagrams follow `.ai/rules/diagrams.md`.
 8. Re-run `check-placeholders` until blocking reaches 0.
 9. Fill `.ai/context/project.md` — it is the last file, because it summarizes the rest.
 

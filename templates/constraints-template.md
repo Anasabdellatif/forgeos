@@ -35,20 +35,7 @@ This file contains cross-cutting constraints that apply to every task. Keep deta
 
 ## Prompt Prohibitions
 
-The `Do not:` list `forgeos next` writes into a generated prompt. The entries below are deliberately
-generic: they restate the contract's non-negotiable rules, which hold for any project, and they name
-nothing specific to yours. **Add your own** — the repositories a slice must not touch, the
-environments it must not reach, the surfaces it must not start.
-
-This file is project-specific, so a sync never overwrites it. Edit the list freely; it is read,
-never written. If this section is deleted, `forgeos next` falls back to a small built-in set and
-says so in its notes.
-
-Two forms, and the parser reads nothing else:
-
-- `- when-not `regex`: text` — emitted unless the slice being named is itself about that subject.
-  A slice about deployment may not be told to avoid deployment.
-- `- text` — always emitted.
+The `Do not:` list `forgeos next` / `forgeos prompt` writes into generated prompts. The entries below are generic; **add your own** — the repositories a slice must not touch, the environments it must not reach, the surfaces it must not start. Edit freely; read, never written. If this section is deleted, `forgeos next` falls back to a small built-in set. Two forms: `- when-not <regex>: text` and `- text`.
 
 ### Conditional
 
@@ -63,6 +50,8 @@ Two forms, and the parser reads nothing else:
 - disable or bypass a security control
 - commit secrets, credentials, tokens, or personal data
 - push
+- spawn autonomous subagents or parallel review swarms
+- unconstrained repo-wide file dumps
 
 ## Unresolved Constraints
 

@@ -894,6 +894,7 @@ Session:
 - Model: $pkg_model
 - Effort: $pkg_effort
 - Why: $pkg_model_reason
+- Execution: Single-agent only (subagents, swarms, and background task loops are forbidden)
 
 You are working in:
 
@@ -925,6 +926,7 @@ Pre-checks:
 - confirm the version is $bp_version
 - read the authoritative files before editing anything
 - reproduce any defect before fixing it
+- enforce single-agent execution; do not launch background subagents or review swarms
 
 Governance:
 

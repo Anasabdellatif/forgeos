@@ -19,11 +19,10 @@ holds only what an agent needs *before* it knows which document to open.
 
 ## Identity
 
-- Name: AI Project Blueprint. Depth: `README.md`
-- One line: a reusable engineering foundation other projects adopt, so one contract governs them all.
-- Stage: `production` — released, versioned, and adopted by one project so far.
-- Profile: `none` — this repository is the blueprint itself, not a system being built, so no
-  profile applies and **nothing is enforcing a role set here**, as `.ai/profiles/README.md` requires.
+- Name: AI Project Blueprint → `README.md`
+- One line: reusable engineering foundation; other projects adopt it, one contract governs all.
+- Stage: `production` — released, versioned, adopted.
+- Profile: `none` — blueprint itself, not a system being built. → `.ai/profiles/README.md`
 - Promoted roles: `none`
 
 ## The three facts an agent must not get wrong
@@ -37,8 +36,7 @@ holds only what an agent needs *before* it knows which document to open.
 
 ## Rules for this file
 
-- **Keep it under 45 lines.** It is loaded every session; depth belongs in `docs/`.
-- Never restate a fact `docs/` owns. Link to it.
-- Treat only completed entries as confirmed facts. Never infer a missing one; record it in
-  `.ai/memory/open-questions.md`.
-- While any `TBD` remains here, the discovery gate is closed. See `.ai/contract/core.md` §0.
+- **Keep it under 45 lines.** Loaded every session; depth belongs in `docs/`.
+- Never restate facts `docs/` owns. Link instead.
+- Completed entries only as facts; unknowns → `.ai/memory/open-questions.md`.
+- Any `TBD` here = discovery gate closed. → `.ai/contract/core.md` §0.

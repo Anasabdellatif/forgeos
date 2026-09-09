@@ -57,3 +57,14 @@ Documentation updated later is documentation never updated.
 - Document non-obvious constraints, invariants, and the reason a surprising approach was chosen.
 - Every `TODO` carries an owner and a task reference, or it does not get committed.
 - Keep public API documentation adjacent to the API and accurate about failure modes.
+
+## 6. Log and Ledger Size Boundedness
+
+- Active progress trackers, handoff logs, and state files must not exceed 300 lines in active
+  agent context. Files that grow past this threshold are beyond what an agent should read whole.
+- Historical logs beyond 300 lines must be archived under `docs/archive/` or inspected with
+  head/tail commands rather than dumped into agent context in full.
+- The always-loaded context files (`.ai/context/*.md`) have individual size targets reported by
+  `scripts/validation/check-context-budget`, which is informational by default and exits 0 even on
+  an overrun. Pass `--fail-on-over` / `-FailOnOver` to make an overrun exit 1, and treat a
+  reported overrun as a defect to fix rather than a number to restate.

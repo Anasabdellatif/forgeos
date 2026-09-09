@@ -31,7 +31,7 @@ project was told not to touch repositories it had never heard of.
 
 Two forms, and the parser reads nothing else:
 
-- `- when-not `regex`: text` — emitted unless the slice being named is itself about that subject.
+- `- when-not <regex>: text` — emitted unless the slice being named is itself about that subject.
   A phase about the CLI may not be told to avoid the CLI.
 - `- text` — always emitted.
 

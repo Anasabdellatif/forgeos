@@ -14,6 +14,9 @@
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+COMPACT=0
+[ "${1:-}" = '--compact' ] && COMPACT=1
+
 total=0
 failed=0
 failed_cases=""
@@ -56,10 +59,12 @@ assert_code() {       # assert_code <case> <expected> <actual>
     failed=$((failed + 1))
     failed_cases="${failed_cases}  - ${case_name} (expected ${expected}, got ${actual})"$'\n'
   fi
-  printf '%s  %-58s expected=%s actual=%s\n' "$label" "$case_name" "$expected" "$actual"
+  if [ "$label" = 'FAIL' ] || [ "$COMPACT" -eq 0 ]; then
+    printf '%s  %-58s expected=%s actual=%s\n' "$label" "$case_name" "$expected" "$actual"
+  fi
 }
 
-echo '== guard-bash.sh ==========================================================='
+[ "$COMPACT" -eq 0 ] && echo '== guard-bash.sh ==========================================================='
 
 BLOCKED_CMDS=(
   'git push --force origin main'
@@ -110,8 +115,10 @@ done
 # deny rules in .claude/settings.json. The harness enforces those with zero process startup,
 # so they are verified by check-policy.sh rather than here.
 
-echo ''
-echo '== scan-secrets.sh ========================================================='
+if [ "$COMPACT" -eq 0 ]; then
+  echo ''
+  echo '== scan-secrets.sh ========================================================='
+fi
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/blueprint-hook-selftest-XXXXXX")"
 trap 'rm -rf "$tmp_root"' EXIT
@@ -138,8 +145,10 @@ secret_case 'env-ref'      0 'password: "${DB_PASSWORD}"'
 assert_code 'stop-loop guard: stop_hook_active=true' 0 \
   "$(run_hook scan-secrets.sh '{"stop_hook_active":true}')"
 
-echo ''
-echo '== guard-discovery.sh ======================================================'
+if [ "$COMPACT" -eq 0 ]; then
+  echo ''
+  echo '== guard-discovery.sh ======================================================'
+fi
 
 # Both fixtures are throwaway projects, never this repository. Testing against the host repo would
 # tie the expected exit codes to whether the blueprint's own context happens to be filled -- so
@@ -240,8 +249,10 @@ enforcer_code="$(run_hook guard-discovery.sh "$src_payload" "$mention_project")"
 assert_code 'reporter and enforcer agree the project is defined' 0 "$((reporter_code + enforcer_code))"
 
 
-echo ''
-echo '== guard-governance.sh ====================================================='
+if [ "$COMPACT" -eq 0 ]; then
+  echo ''
+  echo '== guard-governance.sh ====================================================='
+fi
 
 # A DEFINED project -- discovery open, no TBD anywhere -- whose humans have not authorized code.
 # That is the case discovery cannot see, and the reason this hook exists. Each fixture carries
@@ -298,8 +309,10 @@ printf '%s' "$err" | grep -q 'G1b: scope sign-off' && named=$((named + 1))
 printf '%s' "$err" | grep -q 'src/app\.js'          && named=$((named + 1))
 printf '%s' "$err" | grep -q '\.ai/memory/decisions/' && named=$((named + 1))
 assert_code 'governance refusal names the gate, the file, and the decision place' 3 "$named"
-echo ''
-echo '== new-task.sh discovery gate =============================================='
+if [ "$COMPACT" -eq 0 ]; then
+  echo ''
+  echo '== new-task.sh discovery gate =============================================='
+fi
 
 # Throwaway projects again, never this repository. new-task and check-placeholders both resolve the
 # project root from their own location, so a fixture that carries them measures itself.
@@ -564,8 +577,10 @@ assert_code 'links: a broken parent-parent reference still fails' 1 "$(run_link_
 rm -f "$link_project/docs/Client/notes.md"
 
 
-echo ''
-echo '== adoption and context tooling ============================================'
+if [ "$COMPACT" -eq 0 ]; then
+  echo ''
+  echo '== adoption and context tooling ============================================'
+fi
 
 # sync-blueprint and build-context were breakable without check-all or CI noticing: build-context.ps1
 # had never run on Windows PowerShell 5.1, and sync handed every new project the blueprint's own
@@ -2467,7 +2482,13 @@ bash "$POSIX_INST" --destination "$pin_root/un" --uninstall --apply >/dev/null 2
 mkdir -p "$pin_root/un2"
 bash "$POSIX_INST" --destination "$pin_root/un2" --uninstall --apply >/dev/null 2>&1
 [ "$?" -eq 0 ] && ok=$((ok + 1))
-[ ! -f "$repo_root/package.json" ] && ok=$((ok + 1))
+# A web adopter legitimately owns a root package.json, so its absence is a fact about THIS
+# repository only. Behind the role check, as every source-specific expectation must be.
+if [ "$self_role" = 'source' ]; then
+  [ ! -f "$repo_root/package.json" ] && ok=$((ok + 1))
+else
+  ok=$((ok + 1))
+fi
 [ ! -f "$repo_root/Dockerfile" ] && ok=$((ok + 1))
 [ ! -f "$repo_root/forgeos.rb" ] && ok=$((ok + 1))
 assert_code 'posix installer: uninstall removes only its own file and no package manifest appears' 6 "$ok"

@@ -99,7 +99,7 @@ not a design system.
 
 ### Phase 5 — Architecture → `docs/architecture/overview.md` + `docs/domains/domain-map.md`
 
-Delegate to the `architect` subagent. It must produce:
+Complete in the current session or request human architect guidance; no autonomous subagent delegation (Rule #9). It must produce:
 
 - System boundaries and their responsibilities
 - A **system diagram** in Mermaid (`.ai/rules/diagrams.md`)

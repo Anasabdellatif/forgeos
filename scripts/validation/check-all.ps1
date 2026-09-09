@@ -9,15 +9,28 @@
     The placeholder check is informational by default: a fresh blueprint is expected to report
     findings. Pass -Strict to gate on it, which is the right setting for an adopted project.
 
+    Output is compact by default: only the final SUMMARY table and pass/fail verdict are shown.
+    Pass -Verbose for the full per-check banner and child output (matches the previous behaviour).
+    A failing check always prints its full output regardless of the mode.
+
 .PARAMETER Strict
     Also fail when blocking placeholders remain in always-loaded context.
+
+.PARAMETER Compact
+    Suppress per-check banners and child output (this is the default; the flag is accepted for
+    explicitness).
+
+.PARAMETER Verbose
+    Show per-check banners and full child output (the old behaviour). Overrides -Compact.
 #>
-[CmdletBinding()]
 param(
-    [switch]$Strict
+    [switch]$Strict,
+    [switch]$Compact,
+    [switch]$Verbose
 )
 
 $ErrorActionPreference = 'Continue'
+$IsCompact = -not $Verbose
 
 $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path -Path $scriptDir -ChildPath '..\..')).Path
@@ -37,24 +50,43 @@ function Invoke-Check {
         [switch]$Gating
     )
 
-    Write-Output ''
-    Write-Output ('=' * 78)
-    Write-Output "CHECK: $Name"
-    Write-Output ('=' * 78)
-
     $fullPath = Join-Path -Path $repoRoot -ChildPath $Path
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-        Write-Output "SKIPPED: script not found at $Path"
+        if (-not $IsCompact) {
+            Write-Output ''
+            Write-Output ('=' * 78)
+            Write-Output "CHECK: $Name"
+            Write-Output ('=' * 78)
+            Write-Output "SKIPPED: script not found at $Path"
+        }
         $results.Add([pscustomobject]@{ Name = $Name; Code = -1; Gating = [bool]$Gating; Status = 'missing' })
         return
     }
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fullPath @Arguments | Tee-Object -FilePath $runLog -Append
-    $code = $LASTEXITCODE
+    if ($IsCompact) {
+        # Capture stdout; write to runLog always; show on stdout only on failure.
+        $capturedOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fullPath @Arguments
+        $code = $LASTEXITCODE
+        $capturedOutput | Out-File -FilePath $runLog -Append -Encoding UTF8
+        if ($code -ne 0) {
+            Write-Output ''
+            Write-Output "CHECK FAILED: $Name (exit $code)"
+            $capturedOutput | ForEach-Object { Write-Output $_ }
+        }
+    } else {
+        Write-Output ''
+        Write-Output ('=' * 78)
+        Write-Output "CHECK: $Name"
+        Write-Output ('=' * 78)
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fullPath @Arguments | Tee-Object -FilePath $runLog -Append
+        $code = $LASTEXITCODE
+    }
 
     $status = if ($code -eq 0) { 'passed' } else { 'failed' }
     $results.Add([pscustomobject]@{ Name = $Name; Code = $code; Gating = [bool]$Gating; Status = $status })
 }
+
+$selftestArgs = if ($IsCompact) { @('-Compact') } else { @() }
 
 Invoke-Check -Name 'structure'     -Path 'scripts\validation\check-structure.ps1'    -Arguments @('-Quiet') -Gating
 Invoke-Check -Name 'empty-files'   -Path 'scripts\validation\check-empty-files.ps1'  -Gating
@@ -62,7 +94,7 @@ Invoke-Check -Name 'policy'        -Path 'scripts\validation\check-policy.ps1'  
 Invoke-Check -Name 'links'         -Path 'scripts\validation\check-links.ps1'        -Gating
 Invoke-Check -Name 'bp-version'    -Path 'scripts\validation\check-blueprint-version.ps1' -Gating
 Invoke-Check -Name 'secrets'       -Path 'scripts\hooks\scan-secrets.ps1'  -Arguments @('-ScanTree') -Gating
-Invoke-Check -Name 'hook-selftest' -Path 'scripts\hooks\selftest.ps1'                -Gating
+Invoke-Check -Name 'hook-selftest' -Path 'scripts\hooks\selftest.ps1'      -Arguments $selftestArgs   -Gating
 
 if ($Strict) {
     Invoke-Check -Name 'placeholders' -Path 'scripts\validation\check-placeholders.ps1' -Arguments @('-FailOnBlocking') -Gating

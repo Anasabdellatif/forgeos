@@ -2,8 +2,10 @@
 # Runs the full blueprint validation suite and reports each check's observed result.
 # POSIX counterpart of check-all.ps1.
 #
-# Usage: check-all.sh [--strict]
-#   --strict  also fail when blocking placeholders remain (right setting for an adopted project)
+# Usage: check-all.sh [--strict] [--compact] [--verbose]
+#   --strict   also fail when blocking placeholders remain (right setting for an adopted project)
+#   --compact  suppress per-check banners and child output (default; accepted for explicitness)
+#   --verbose  show per-check banners and full child output (old behaviour); overrides --compact
 #
 # Exit 0 only when every gating check passed.
 
@@ -11,7 +13,18 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 STRICT=0
-[ "${1:-}" = "--strict" ] && STRICT=1
+IS_COMPACT=1  # default: compact
+IS_VERBOSE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --strict)  STRICT=1 ;;
+    --compact) IS_COMPACT=1 ;;
+    --verbose) IS_COMPACT=0; IS_VERBOSE=1 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
 
 # Every check prints the number the public page claims -- the self-test total, the policy control
 # count, the link counts. Until now the audit could not see them and reported them UNCHECKED, and
@@ -28,19 +41,44 @@ run_check() {   # run_check <name> <relative-script> <gating:0|1> [args...]
   local name="$1" script="$2" gating="$3"
   shift 3
 
-  echo ''
-  printf '%.0s=' {1..78}; echo ''
-  echo "CHECK: $name"
-  printf '%.0s=' {1..78}; echo ''
-
   if [ ! -f "$REPO_ROOT/$script" ]; then
-    echo "SKIPPED: script not found at $script"
+    if [ "$IS_VERBOSE" -eq 1 ]; then
+      echo ''
+      printf '%.0s=' {1..78}; echo ''
+      echo "CHECK: $name"
+      printf '%.0s=' {1..78}; echo ''
+      echo "SKIPPED: script not found at $script"
+    fi
     names+=("$name"); codes+=("-1"); gates+=("$gating")
     return
   fi
 
-  bash "$REPO_ROOT/$script" "$@" | tee -a "$RUN_LOG"
-  local code=$?
+  local code tmpout tmperr
+  if [ "$IS_COMPACT" -eq 1 ]; then
+    # In compact mode: auto-pass --compact to selftest; capture output; show on failure only.
+    local compact_extra=()
+    [ "$script" = 'scripts/hooks/selftest.sh' ] && compact_extra=(--compact)
+    tmpout="$(mktemp)"
+    tmperr="$(mktemp)"
+    bash "$REPO_ROOT/$script" "$@" "${compact_extra[@]}" > "$tmpout" 2>"$tmperr"
+    code=$?
+    cat "$tmpout" >> "$RUN_LOG"
+    if [ "$code" -ne 0 ]; then
+      echo ''
+      echo "CHECK FAILED: $name (exit $code)"
+      cat "$tmpout"
+      [ -s "$tmperr" ] && cat "$tmperr" >&2
+    fi
+    rm -f "$tmpout" "$tmperr"
+  else
+    echo ''
+    printf '%.0s=' {1..78}; echo ''
+    echo "CHECK: $name"
+    printf '%.0s=' {1..78}; echo ''
+    bash "$REPO_ROOT/$script" "$@" | tee -a "$RUN_LOG"
+    code=$?
+  fi
+
   names+=("$name"); codes+=("$code"); gates+=("$gating")
 }
 

@@ -17,14 +17,14 @@
 
 .NOTES
     Exit 0 reported (including undefined, blocked, or missing sources); 1 the repository is
-    unreadable, or -Section prompt refuses to invent facts.
+    unreadable, or -Section prompt / -Section brief refuses to invent facts.
 #>
 # -Section exists so the wrapper can ask for a subset instead of re-parsing this command's output.
 # One emitter, one place: a consumer that had to slice JSON back apart would be a second grammar for
 # the same document, and this repository has paid for that mistake before.
 param(
     [switch]$Json,
-    [ValidateSet('all', 'next', 'prompt')]
+    [ValidateSet('all', 'next', 'prompt', 'brief')]
     [string]$Section = 'all'
 )
 
@@ -323,6 +323,7 @@ foreach ($d in @('migrations', 'db\migrations', 'database\migrations', 'supabase
 
 $activeFiles = @(Get-DocFiles -Dir (Join-Path $repoRoot '.ai\tasks\active') | Where-Object { $_ })
 $activeNames = @($activeFiles | ForEach-Object { $_.Name })
+$inboxNames = @(Get-DocFiles -Dir (Join-Path $repoRoot '.ai\tasks\inbox') | Where-Object { $_ } | ForEach-Object { $_.Name })
 $doneFiles = @(Get-DocFiles -Dir (Join-Path $repoRoot '.ai\tasks\completed') | Where-Object { $_ })
 $recentDone = $null
 if ($doneFiles.Count -gt 0) { $recentDone = $doneFiles[-1].Name }
@@ -992,6 +993,17 @@ Validation:
 - full: $vpFirstFull
 - ShellCheck must come from CI: $ciText
 
+Economy -- the large-session protocol (.ai/contract/economy.md section 4):
+
+- effort is depth per decision, never a licence for broad reads or repeated validation
+- read specifications by the section the slice names, never a whole chapter; say why before any read over ~200 lines
+- run the full suite once, on the final diff; re-run only after a change to what it covers
+- run the other shell, selftest, and the release selftest only when shell scripts, hooks, or cross-platform tooling changed
+- replay a SQL or database rehearsal only when SQL changed after the last successful one
+- never edit while a long check runs
+- use compact output; summarize a result in a line or two instead of pasting the log
+- after a third full-suite run, a second rehearsal, or a context too large to hold the diff: stop, refresh the ledger, hand off, report
+
 Do not:
 
 $dnText
@@ -1002,6 +1014,83 @@ $pkgReportText
 
 Stop after the local commit and report. Do not push.
 "@
+
+# --- the session brief (-Section brief) -----------------------------------------------------------
+# The same facts as the package, cut to what a session must not get wrong, under a hard budget: 800
+# tokens at the contract's own chars / 4 estimate (.ai/contract/economy.md section 3), measured in
+# UTF-8 bytes after normalizing line endings so both shells count the same thing. Nothing here is a
+# new fact -- every line is a projection of a package field -- so the brief can never say what the
+# package would refuse to say, and it refuses on exactly the same missing sources.
+$briefMaxTokens = 800
+$briefRead = New-Object System.Collections.Generic.List[string]
+foreach ($rp in @('.ai/context/current-state.md', '.ai/context/constraints.md', 'docs/roadmap.md')) {
+    if (Test-Path -LiteralPath (Join-Path $repoRoot ($rp -replace '/', '\'))) { $briefRead.Add($rp) }
+}
+foreach ($tn in @($activeNames)) { if ($tn) { $briefRead.Add(".ai/tasks/active/$tn") } }
+$briefProtected = @($pkgForbidden | Where-Object { $_ -match ' -- protected by ' } | ForEach-Object { ($_ -split ' -- ')[0] })
+$briefProtectedCount = $briefProtected.Count
+if ($briefProtectedCount -gt 0) {
+    $briefSample = (@($briefProtected | Select-Object -First 3) -join ', ')
+    if ($briefProtectedCount -gt 3) { $briefSample += ', ...' }
+    $briefForbidden = "$briefProtectedCount protected path(s) in .ai/context/governance.json ($briefSample) and anything a `"Do not`" entry names"
+} else {
+    $briefForbidden = 'no protected paths are declared in .ai/context/governance.json; anything a "Do not" entry names'
+}
+$briefNow = 'unknown'
+if ($sNow) { $briefNow = $sNow }
+$briefReadText = (@($briefRead) -join ', ')
+if (-not $briefReadText) { $briefReadText = 'none of the ledger, constraints, or roadmap exists yet' }
+$briefDoNot = @($dn | ForEach-Object { $_ -replace '^- ', '' })
+# The blocked state, in the brief itself. The engine already knew every blocker and reported it to
+# `next`; the brief said nothing, and three cold sessions on one adopted project each spent 6-9
+# targeted reads rediscovering a blocker the ledger had named. The alternative is the one thing the
+# repository has already written down -- a task record waiting in .ai/tasks/inbox/ -- offered as a
+# candidate to check, never as a choice made; with no record, the brief says so rather than invent
+# a slice. Nothing here ranks roadmap rows or infers "maintenance" work: that would be a guess.
+$briefAltFound = $false; $briefAltSource = 'none'; $briefAltCandidates = @()
+if ($recBlocked) {
+    $briefBlockedText = 'Blocked: yes -- ' + (@($recBlockers) -join '; ') + '. Do not start the capability above while a blocker stands.'
+    if ($inboxNames.Count -gt 0) {
+        $briefAltFound = $true; $briefAltSource = '.ai/tasks/inbox'; $briefAltCandidates = @($inboxNames)
+        $briefBlockedText += "`nAlternative: not chosen here -- $($inboxNames.Count) task record(s) already written in .ai/tasks/inbox/ ($(@($inboxNames) -join ', ')); read each record's Blocked section before activating one."
+    } else {
+        $briefBlockedText += "`nAlternative: none found in repository state -- .ai/tasks/inbox/ holds no task record, and this command does not invent one; ask the owner to clear the blocker or to name a maintenance or evidence slice."
+    }
+} else {
+    $briefBlockedText = 'Blocked: no -- proceed with the capability above.'
+}
+$briefPrompt = @"
+# ForgeOS brief -- $promptSubject
+
+Session: $pkgSessionName | new session: $pkgNewSessionText | model: $pkgModel | effort: $pkgEffort
+Execution: single-agent only -- no subagents, review swarms, or background task loops.
+Repository: $repoName @ $branch | HEAD $commit | version $bpVersion | state $projectState
+Now: $briefNow
+Capability: $recCapability -- its acceptance criteria are its row in $recSource; read that row before writing anything.
+$briefBlockedText
+
+Read first: $briefReadText
+The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.
+
+Pre-checks: clean tree on $branch; HEAD is $commit; version is $bpVersion; reproduce any defect before fixing it.
+Governance: $govLine
+Scope: allowed -- $pkgAllowed. Forbidden -- $briefForbidden.
+Validation: narrow -- $vpFirstNarrow; full -- $vpFirstFull; ShellCheck from CI: $ciText
+Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.
+
+Do not:
+
+$dnText
+
+Report: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.
+Stop after the local commit and report. Do not push.
+"@
+# A here-string carries the script file's own line endings (CRLF here); the POSIX half emits LF.
+# Normalized once so the JSON string, the byte count, and the wrapper's byte-identity all agree.
+$briefPrompt = $briefPrompt -replace "`r`n", "`n"
+$briefBytes = [System.Text.Encoding]::UTF8.GetByteCount($briefPrompt)
+$briefTokens = [int][math]::Ceiling($briefBytes / 4)
+$briefWithin = ($briefTokens -le $briefMaxTokens)
 
 $map = [ordered]@{
     product = [ordered]@{
@@ -1196,6 +1285,61 @@ if ($Json -and $Section -eq 'prompt') {
     exit 0
 }
 
+# The brief subset: its own schema id, the same refusal rule as the package, and a measured budget,
+# so "compact" is a number a consumer can check rather than a promise.
+if ($Json -and $Section -eq 'brief') {
+    if ($pkgMissing.Count -gt 0) {
+        ([ordered]@{
+            schema        = 'forgeos.project-brief/1'
+            generatedFrom = 'repository files only'
+            generated     = $false
+            missing       = @($pkgMissing)
+            safety        = $status.safety
+        }) | ConvertTo-Json -Depth 6
+        exit 1
+    }
+    ([ordered]@{
+        schema        = 'forgeos.project-brief/1'
+        generatedFrom = 'repository files only'
+        generated     = $true
+        project       = [ordered]@{
+            identity = $repoName; version = $bpVersion; branch = $branch; commit = $commit
+            state = $projectState
+        }
+        nextRecommendation = [ordered]@{
+            capability = $recCapability; source = $recSource; confidence = $recConfidence
+            blocked = $recBlocked; blockers = @($recBlockers)
+        }
+        alternative   = [ordered]@{
+            searched = $recBlocked; found = $briefAltFound; source = $briefAltSource
+            candidates = @($briefAltCandidates)
+        }
+        session       = [ordered]@{
+            newSession = $pkgNewSession; name = $pkgSessionName
+            model = $pkgModel; effort = $pkgEffort; category = $pkgCategory
+        }
+        governance    = [ordered]@{
+            windowRequired = $gdRequired; codeAuthorized = $pkgGovAuthorized
+        }
+        scope         = [ordered]@{
+            allowed = $pkgAllowed; protectedPathCount = $briefProtectedCount
+            protectedPathsSource = '.ai/context/governance.json'
+        }
+        readFirst      = @($briefRead)
+        validationPlan = [ordered]@{
+            narrow = $vpFirstNarrow; full = $vpFirstFull; ciRequired = $vpCi
+        }
+        doNot          = @($briefDoNot)
+        budget         = [ordered]@{
+            bytes = $briefBytes; estimatedTokens = $briefTokens; maxTokens = $briefMaxTokens
+            withinBudget = $briefWithin; method = 'UTF-8 bytes / 4, rounded up'
+        }
+        generatedPrompt = $briefPrompt
+        safety          = $status.safety
+    }) | ConvertTo-Json -Depth 6
+    exit 0
+}
+
 if ($Json) {
     $status | ConvertTo-Json -Depth 6
     exit 0
@@ -1210,6 +1354,34 @@ function Nz {
     # The JSON is untouched: ConvertTo-Json emits the JSON literal regardless of this.
     if ($Value -is [bool]) { return $Value.ToString().ToLower() }
     return $Value
+}
+
+# The human half of -Section brief: one header line, the brief, one footer -- and nothing else,
+# because every extra line is paid for again by the session that pastes it. It refuses exactly as
+# the package does, on exactly the same missing sources.
+if ($Section -eq 'brief') {
+    Write-Output ''
+    if ($pkgMissing.Count -gt 0) {
+        Write-Output "ForgeOS session brief  [$projectState]"
+        Write-Output ''
+        Write-Output '  cannot generate: a brief would have to invent facts, and this command refuses to.'
+        Write-Output ''
+        Write-Output '  missing:'
+        foreach ($pm in $pkgMissing) { Write-Output ("    - {0}" -f $pm) }
+        Write-Output ''
+        Write-Output '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+        Write-Output ''
+        exit 1
+    }
+    $briefVerdict = 'within'
+    if (-not $briefWithin) { $briefVerdict = 'OVER' }
+    Write-Output ("ForgeOS session brief  [{0}]  ~{1} tokens, {2} the {3}-token budget (UTF-8 bytes / 4)" -f $projectState, $briefTokens, $briefVerdict, $briefMaxTokens)
+    Write-Output ''
+    Write-Output $briefPrompt
+    Write-Output ''
+    Write-Output '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+    Write-Output ''
+    exit 0
 }
 
 # The human half of -Section prompt: the whole package, self-contained, then out. It refuses with

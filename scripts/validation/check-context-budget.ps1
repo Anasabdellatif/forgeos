@@ -98,6 +98,24 @@ Write-Output ('  {0,-38} {1,6} chars  ~{2,5} tokens' -f 'always-loaded total', $
 Write-Output ('  budget: target {0} tokens, warn {1} (chars/token: {2})' -f $target, $warn, $charsPerToken)
 Write-Output ('  project allowance: ~{0} tokens to target, ~{1} to warn (target minus the platform floor)' -f $allowTarget, $allowWarn)
 
+$descChars = 0
+$descCount = 0
+$agentFiles = @(Get-ChildItem -Path (Join-Path $repoRoot '.claude\agents\*.md') -ErrorAction SilentlyContinue)
+$skillFiles = @(Get-ChildItem -Path (Join-Path $repoRoot '.claude\skills\*\SKILL.md') -ErrorAction SilentlyContinue)
+foreach ($df in ($agentFiles + $skillFiles)) {
+    if ($df.Name -ne 'README.md') {
+        $content = Get-Content -LiteralPath $df.FullName -Raw -Encoding UTF8
+        if ($content -match '(?s)^---\r?\n(.*?)\r?\n---') {
+            $descChars += $matches[1].Length
+            $descCount++
+        }
+    }
+}
+if ($descChars -gt 0) {
+    $descTk = [math]::Floor($descChars / $charsPerToken)
+    Write-Output ('  platform descriptors ({0} agents/skills): {1,6} chars  ~{2,5} tokens' -f $descCount, $descChars, $descTk)
+}
+
 if ($script:missing -gt 0) {
     Write-Output "Context budget check FAILED  ($script:missing budgeted file(s) missing -- seed or sync the project first)"
     exit 1

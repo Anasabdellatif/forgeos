@@ -14,8 +14,13 @@
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-COMPACT=0
-[ "${1:-}" = '--compact' ] && COMPACT=1
+COMPACT=1
+for _arg in "$@"; do
+  case "$_arg" in
+    --verbose|-v) COMPACT=0 ;;
+    --compact)    COMPACT=1 ;;
+  esac
+done
 
 total=0
 failed=0
@@ -2278,13 +2283,13 @@ assert_code 'prompt package: a named capability yields the full package' 6 "$ok"
 # Model and effort come from scripts/lib/session-policy.json -- a data table, first match wins --
 # and changing the capability changes the category without touching a line of engine code.
 ok=0
-grep -qE '^    model +Fable$' "$pp2/pkg1.txt" && ok=$((ok + 1))
-grep -qE '^    effort +Ultracode$' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    model +frontier$' "$pp2/pkg1.txt" && ok=$((ok + 1))
+grep -qE '^    effort +max$' "$pp2/pkg1.txt" && ok=$((ok + 1))
 grep -qE '^    category +public-release-history-ci-security$' "$pp2/pkg1.txt" && ok=$((ok + 1))
 pp2_roadmap 'Update the adopted blueprint'
 bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg2.txt" 2>&1
 grep -qE '^    model +a fast capable model$' "$pp2/pkg2.txt" && ok=$((ok + 1))
-grep -qE '^    effort +Medium$' "$pp2/pkg2.txt" && ok=$((ok + 1))
+grep -qE '^    effort +medium$' "$pp2/pkg2.txt" && ok=$((ok + 1))
 grep -qE '^    category +adoption-update$' "$pp2/pkg2.txt" && ok=$((ok + 1))
 assert_code 'prompt package: model and effort come from the policy table' 6 "$ok"
 
@@ -2346,12 +2351,92 @@ grep -q '"readFirst"' "$pp2/pkg3.json" && grep -q '"reportChecklist"' "$pp2/pkg3
 [ "$(grep -cE '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)": false' "$pp2/pkg3.json")" -eq 3 ] && ok=$((ok + 1))
 assert_code 'prompt package: the JSON carries the contract and the safety flags are false' 6 "$ok"
 
+# --- the session brief (--section brief) ------------------------------------------------------------
+# The brief is the package cut to what a session must not get wrong, under a measured budget. The
+# wrapper reaches it two ways -- `forgeos brief` and `forgeos prompt --brief` -- and both must be
+# byte-identical to the engine, or "compact" would be a third answer. Host-aware like the package
+# case: the shape is asserted, never this repository's own roadmap state.
+br_fg="$(bash "$FORGEOS_CMD" brief 2>/dev/null)"; br_fg_code=$?
+br_fg2="$(bash "$FORGEOS_CMD" prompt --brief 2>/dev/null)"; br_fg2_code=$?
+br_en="$(bash "$STATUS_CMD" --section brief 2>/dev/null)"; br_en_code=$?
+ok=0
+[ "$br_fg" = "$br_en" ] && [ "$br_fg_code" -eq "$br_en_code" ] && ok=$((ok + 1))
+[ "$br_fg2" = "$br_en" ] && [ "$br_fg2_code" -eq "$br_en_code" ] && ok=$((ok + 1))
+bash "$FORGEOS_CMD" --help 2>/dev/null | grep -q 'forgeos brief' && ok=$((ok + 1))
+bash "$FORGEOS_CMD" brief --apply >/dev/null 2>&1; [ $? -eq 1 ] && ok=$((ok + 1))
+bash "$FORGEOS_CMD" status --brief >/dev/null 2>&1; [ $? -eq 1 ] && ok=$((ok + 1))
+if printf '%s' "$pkg_next_json" | grep -q '"capability": "unknown"'; then
+  [ "$br_en_code" -eq 1 ] && printf '%s' "$br_en" | grep -q 'cannot generate' && ok=$((ok + 1))
+else
+  [ "$br_en_code" -eq 0 ] && printf '%s' "$br_en" | grep -q '# ForgeOS brief -- ' && ok=$((ok + 1))
+fi
+assert_code 'brief package: the wrapper routes brief and prompt --brief to the engine and they agree' 6 "$ok"
+
+# Under a named capability the brief is generated, carries its own schema, and fits the budget it
+# declares -- measured on the WHOLE human output, not only the prompt inside it, in UTF-8 bytes / 4,
+# the contract's own estimate. The fixture is the adopted shape, so the number is the blueprint's
+# floor rather than this repository's.
+pp2_roadmap 'Harden the release workflow security'
+bash "$pp2/scripts/command/project-status.sh" --section brief > "$pp2/brief1.txt" 2>/dev/null; brf1_code=$?
+bash "$pp2/scripts/command/project-status.sh" --section brief --json > "$pp2/brief2.json" 2>/dev/null; brf2_code=$?
+ok=0
+[ "$brf1_code" -eq 0 ] && [ "$brf2_code" -eq 0 ] && ok=$((ok + 1))
+[ "$(wc -c < "$pp2/brief1.txt" | tr -d ' ')" -le 3200 ] && ok=$((ok + 1))
+grep -qE '^Session: pp2 - Harden the release workflow security \| new session: true \| model: frontier \| effort: max$' "$pp2/brief1.txt" && ok=$((ok + 1))
+grep -q 'Stop after the local commit and report. Do not push.' "$pp2/brief1.txt" && ok=$((ok + 1))
+grep -q '"schema": "forgeos.project-brief/1"' "$pp2/brief2.json" && grep -q '"generated": true' "$pp2/brief2.json" && ok=$((ok + 1))
+grep -q '"maxTokens": 800' "$pp2/brief2.json" && grep -q '"withinBudget": true' "$pp2/brief2.json" \
+  && [ "$(grep -cE '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)": false' "$pp2/brief2.json")" -eq 3 ] && ok=$((ok + 1))
+# The large-session protocol line: a brief within budget once launched a session that still hit its
+# usage limit, so the brief now carries the whole-session bound, and the full package the same bullets.
+bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/brief7.txt" 2>/dev/null
+grep -q '^Economy: large-session protocol, \.ai/contract/economy\.md section 4 -- ' "$pp2/brief1.txt"   && grep -q '^Economy -- the large-session protocol (\.ai/contract/economy\.md section 4):$' "$pp2/brief7.txt" && ok=$((ok + 1))
+assert_code 'brief package: a named capability yields a brief inside its 800-token budget' 7 "$ok"
+
+# Missing context refuses by name on the brief too: a short prompt around an invented capability
+# would be the cheapest possible way to send a session in the wrong direction.
+ok=0
+brr1="$(bash "$pp3/scripts/command/project-status.sh" --section brief 2>/dev/null)"; brr1_code=$?
+brr2="$(bash "$pp3/scripts/command/project-status.sh" --section brief --json 2>/dev/null)"; brr2_code=$?
+[ "$brr1_code" -eq 1 ] && ok=$((ok + 1))
+printf '%s' "$brr1" | grep -q 'cannot generate' && printf '%s' "$brr1" | grep -q 'docs/roadmap.md' && ok=$((ok + 1))
+printf '%s' "$brr1" | grep -q '# ForgeOS brief -- ' || ok=$((ok + 1))
+[ "$brr2_code" -eq 1 ] && printf '%s' "$brr2" | grep -q '"generated": false' && ok=$((ok + 1))
+assert_code 'brief package: missing context is named, never invented' 4 "$ok"
+
+# A blocked capability is named IN the brief, with the blocker the engine already knew: three cold
+# sessions on one adopted project each rediscovered a ledger blocker by hand because the brief kept
+# it to itself. The alternative is never invented -- with an empty inbox the brief says none was
+# found; with a task record someone already wrote, that record is offered as a candidate to check,
+# not as a choice made. The full package is untouched by either state.
+printf '# Current State\n\n## Position\n\n- Now: building the first capability\n- Next: the roadmap names it\n- Blocked by: an owner decision on visibility\n' > "$pp2/.ai/context/current-state.md"
+bash "$pp2/scripts/command/project-status.sh" --section brief > "$pp2/brief3.txt" 2>/dev/null; brb1_code=$?
+bash "$pp2/scripts/command/project-status.sh" --section brief --json > "$pp2/brief4.json" 2>/dev/null; brb2_code=$?
+mkdir -p "$pp2/.ai/tasks/inbox"
+printf '# Task: Refresh the ledger\n' > "$pp2/.ai/tasks/inbox/2026-01-01-refresh-the-ledger.md"
+bash "$pp2/scripts/command/project-status.sh" --section brief > "$pp2/brief5.txt" 2>/dev/null
+bash "$pp2/scripts/command/project-status.sh" --section brief --json > "$pp2/brief6.json" 2>/dev/null
+bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg-blocked.txt" 2>/dev/null
+rm -rf "$pp2/.ai/tasks"
+printf '# Current State\n\n## Position\n\n- Now: building the first capability\n- Next: the roadmap names it\n- Blocked by: none\n' > "$pp2/.ai/context/current-state.md"
+ok=0
+[ "$brb1_code" -eq 0 ] && [ "$brb2_code" -eq 0 ] && ok=$((ok + 1))
+grep -q '^Blocked: yes -- the state ledger names a blocker: an owner decision on visibility' "$pp2/brief3.txt" \
+  && grep -q 'Do not start the capability above while a blocker stands\.$' "$pp2/brief3.txt" && ok=$((ok + 1))
+grep -q '^Alternative: none found in repository state -- \.ai/tasks/inbox/ holds no task record, and this command does not invent one' "$pp2/brief3.txt" && ok=$((ok + 1))
+grep -q '"blocked": true' "$pp2/brief4.json" && grep -q '"the state ledger names a blocker: an owner decision on visibility"' "$pp2/brief4.json" \
+  && grep -q '"searched": true' "$pp2/brief4.json" && grep -q '"found": false' "$pp2/brief4.json" && ok=$((ok + 1))
+grep -q '^Alternative: not chosen here -- 1 task record(s) already written in \.ai/tasks/inbox/ (2026-01-01-refresh-the-ledger\.md); read each record' "$pp2/brief5.txt" \
+  && grep -q '"found": true' "$pp2/brief6.json" && grep -q '"candidates": \["2026-01-01-refresh-the-ledger\.md"\]' "$pp2/brief6.json" && ok=$((ok + 1))
+grep -q 'Blocked: yes' "$pp2/pkg-blocked.txt" || grep -q 'Alternative:' "$pp2/pkg-blocked.txt" || ok=$((ok + 1))
+assert_code 'brief package: a blocked capability names its blocker and invents no alternative' 6 "$ok"
+
 # The policy table's one-category-per-line contract is enforced, on both shells: a reformatted
 # table -- an editor's format-on-save is enough -- once made the line-wise POSIX parser pick a
 # category with an empty model and exit 0 while the other shell answered correctly. Failing OPEN
 # on the one file this feature tells projects to edit is the exact inventing the package refuses,
 # so malformed means a named refusal, identically, everywhere.
-printf '{\n  "schema": "forgeos.session-policy/1",\n  "categories": [\n    {\n      "key": "implementation-default",\n      "model": "Fable",\n      "effort": "Max",\n      "reason": "x"\n    }\n  ]\n}\n' > "$pp2/scripts/lib/session-policy.json"
+printf '{\n  "schema": "forgeos.session-policy/1",\n  "categories": [\n    {\n      "key": "implementation-default",\n      "model": "frontier",\n      "effort": "high",\n      "reason": "x"\n    }\n  ]\n}\n' > "$pp2/scripts/lib/session-policy.json"
 bash "$pp2/scripts/command/project-status.sh" --section prompt > "$pp2/pkg4.txt" 2>&1; pp2_ref_code=$?
 bash "$pp2/scripts/command/project-status.sh" --section prompt --json > "$pp2/pkg5.json" 2>&1; pp2_ref_json=$?
 ok=0

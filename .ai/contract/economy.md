@@ -60,3 +60,38 @@ unmanaged run of the same scope have both been measured — no such comparison h
 - Package sizes come from `scripts/ai/build-context` (`--minimal` vs full), measured on stdout.
 - Time-to-MVP is measured from the first discovery session to the accepted vertical slice, in
   working days, recorded in the project's `.ai/memory/`.
+
+## 4. Large-session protocol
+
+A launcher under budget does not bound the session it launches. One large database-implementation
+session on an adopted project (2026-09-12) started from a brief within budget and still reached
+the usage limit: broad specification reads, four migrations, a rehearsal run twice, and full
+validation run more than once. The brief is a launcher improvement; this section is the
+whole-session bound. It applies to every implementation session, and `forgeos brief` and `forgeos
+prompt` carry its one-line form. **None of it relaxes validation, review, safety, or a gate** — it
+removes repetition, not evidence.
+
+1. **Single agent.** No subagents, review swarms, background agents, or orchestration modes unless
+   the user authorized them in this conversation (`core.md` §3 rule 9). An authorized reviewer
+   gets a role packet (`build-context --role`), never the repository.
+2. **Read by section, state the reason.** Open the specification sections the slice names —
+   one table, one section, one route — never a whole chapter or data-model part. One line saying
+   why, before any read over ~200 lines.
+3. **Effort is per decision, not per session.** The policy table's effort names the depth for
+   the hard decisions in the slice; it is not a licence for broad reads or repeated checks.
+4. **Validate once per change.** Narrow check after each step; the full suite once, on the final
+   diff. Re-run it only after a change to what it covers. No editing while a long check runs —
+   the result would describe a tree that no longer exists.
+5. **Cross-platform and selftest only on trigger.** The other shell's `check-all`, `selftest`,
+   and the release selftest run only when shell scripts, hooks, or cross-platform tooling changed.
+6. **Rehearse SQL once.** A migration or database rehearsal replays only when SQL changed after
+   the last successful rehearsal. Record the rehearsal's commit in the task record.
+7. **Compact output.** `--compact` where a check offers it; summarize a command's result in one
+   or two lines instead of pasting the log. The observed exit code and count are the evidence.
+8. **Stop in the usage-risk zone.** After the third full-suite run, the second rehearsal, or a
+   context that has grown past the point of holding the diff, stop: refresh the ledger, write the
+   handoff (`reporting.md` §0), report, and let the next session continue from files.
+
+The protocol is itself unmeasured: it names the repetition that one incident showed, and the
+whole-session comparison in `.ai/memory/open-questions.md` Q-006 remains open until a managed
+run of a real slice has been measured against the same slice without it.

@@ -19,11 +19,12 @@
 #
 # Exit 2 blocks the write. Exit 0 allows it.
 #
-# Fails OPEN when the manifest cannot be read -- deliberate, and consistent with _json.sh: a hook
-# is a safety net, not a security boundary, and a hook that blocks every write on a machine with no
-# JSON parser is a hook that gets switched off. The fail-CLOSED half of this control is
-# check-placeholders --fail-on-blocking, which since 1.7.2 refuses to report a clean result it did
-# not compute.
+# Fails CLOSED when the manifest is missing, unreadable, or incomplete: exit 2, naming the file. A
+# gate that cannot read its own rules cannot confirm the project is defined, and allowing the write
+# in that state was the one direction the checker it defers to already refuses --
+# check-placeholders --fail-on-blocking has failed closed on an unreadable manifest since 1.7.2. A
+# malformed PAYLOAD still fails open (scripts/hooks/README.md): that is a harness parsing fault, not
+# a missing rule, and the two are kept distinct on purpose.
 
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,12 +70,22 @@ $2
   fi
 }
 
-fail_open() {
-  echo "guard-discovery: manifest unreadable, allowing the write. Run check-placeholders --fail-on-blocking to check the gate properly." >&2
-  exit 0
+fail_closed() {
+  cat >&2 <<EOF
+BLOCKED by the discovery gate (scripts/hooks/guard-discovery.sh).
+
+File    : $file_path
+Reason  : the gate cannot confirm this project is defined. Its manifest is missing, unreadable,
+          or incomplete: $MANIFEST
+
+This refuses rather than allows: a gate that cannot read its own rules is not a gate. Restore the
+file from the blueprint, or run a sync, then try again. To see the verdict directly:
+  bash scripts/validation/check-placeholders.sh --fail-on-blocking
+EOF
+  exit 2
 }
 
-[ -f "$MANIFEST" ] || fail_open
+[ -f "$MANIFEST" ] || fail_closed
 
 mapfile -t ALLOW_PREFIX < <(read_gate '.policy.discoveryGate.allowedPrefixes[]?' \
   'print("\n".join(d["policy"]["discoveryGate"]["allowedPrefixes"]))')
@@ -86,7 +97,7 @@ mapfile -t BLOCKING     < <(read_gate '[.placeholderScan.targets[] | select(.wei
   'print("\n".join(t["path"] for t in d["placeholderScan"]["targets"] if t["weight"]=="blocking"))')
 
 if [ "${#ALLOW_PREFIX[@]}" -eq 0 ] || [ "${#MARKERS[@]}" -eq 0 ] || [ "${#BLOCKING[@]}" -eq 0 ]; then
-  fail_open
+  fail_closed
 fi
 
 # Relative path, forward slashes. A file outside the project is not this gate's business.

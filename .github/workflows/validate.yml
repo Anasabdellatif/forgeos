@@ -72,7 +72,11 @@ jobs:
         # Out-File, not ">": PowerShell 5.1 redirects as UTF-16LE, and a POSIX grep reads that
         # as zero lines. v1.10.4 failed on exactly that -- a complete 60-case file that looked
         # empty to the parity job.
-        run: .\scripts\hooks\selftest.ps1 | Out-File -FilePath selftest-windows.txt -Encoding utf8
+        # -Verbose, explicitly: since v1.17.0 the suite is compact by default, and compact output
+        # carries no per-case lines at all. Without this the artifact arrives well-formed and
+        # empty, and the parity job reports zero cases on both sides -- the same failure shape as
+        # v1.10.4, from the opposite cause. The capture must ask for what it intends to compare.
+        run: .\scripts\hooks\selftest.ps1 -Verbose | Out-File -FilePath selftest-windows.txt -Encoding utf8
 
       - name: Publish the case list
         uses: actions/upload-artifact@v7
@@ -112,9 +116,11 @@ jobs:
         if: hashFiles('scripts/release/build-artifact.sh') != ''
         run: bash scripts/release/selftest-release.sh
 
-      # Same purpose as the Windows capture: this half of the case list has to reach the parity job.
+      # Same purpose as the Windows capture: this half of the case list has to reach the parity
+      # job, and --verbose for the same reason the Windows half passes -Verbose -- compact is the
+      # default since v1.17.0 and prints no per-case lines.
       - name: Capture the self-test case list
-        run: bash scripts/hooks/selftest.sh > selftest-posix.txt
+        run: bash scripts/hooks/selftest.sh --verbose > selftest-posix.txt
 
       - name: Publish the case list
         uses: actions/upload-artifact@v7

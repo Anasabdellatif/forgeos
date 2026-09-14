@@ -18,6 +18,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TASK_PATH=""
 PLAN_PATH=""
 OUTPUT_PATH=""
+ROLE=""
 FORCE=0
 INCLUDE_DOCS=0
 MINIMAL=0
@@ -28,6 +29,7 @@ while [ $# -gt 0 ]; do
     --task)         TASK_PATH="${2:-}"; shift 2 ;;
     --plan)         PLAN_PATH="${2:-}"; shift 2 ;;
     --output)       OUTPUT_PATH="${2:-}"; shift 2 ;;
+    --role)         ROLE="${2:-}"; shift 2 ;;
     --force)        FORCE=1; shift ;;
     --include-docs) INCLUDE_DOCS=1; shift ;;
     --minimal)      MINIMAL=1; shift ;;
@@ -38,6 +40,28 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$MAX_BYTES" -lt 1024 ] 2>/dev/null && { echo "--max-bytes must be at least 1024." >&2; exit 1; }
+
+# A Windows absolute path (C:\x or C:/x) reaches this script unchanged from Git Bash and MSYS2
+# callers. Without normalization it fails the /* test below, is joined under REPO_ROOT, and is
+# refused as missing -- a false rejection of a path the PowerShell half accepts as rooted. cygpath
+# owns the conversion where it exists; the fallback is the MSYS form, /c/x, drive letter lowered.
+normalize_path() {
+  case "$1" in
+    [A-Za-z]:[\\/]*)
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$1"
+      else
+        local drive rest
+        drive="$(printf '%s' "${1%%:*}" | tr '[:upper:]' '[:lower:]')"
+        rest="$(printf '%s' "${1#?:}" | tr '\\' '/')"
+        printf '/%s%s' "$drive" "$rest"
+      fi ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+[ -n "$TASK_PATH" ]   && TASK_PATH="$(normalize_path "$TASK_PATH")"
+[ -n "$PLAN_PATH" ]   && PLAN_PATH="$(normalize_path "$PLAN_PATH")"
+[ -n "$OUTPUT_PATH" ] && OUTPUT_PATH="$(normalize_path "$OUTPUT_PATH")"
 
 PLACEHOLDER='(example|placeholder|change[_-]?me|your[_-][a-z0-9_-]*|goes[_-]?here|xxx+|\.\.\.|<[^>]+>|\$\{[^}]+\}|\{\{[^}]+\}\}|dummy|redacted|sample|test[_-]?only|fake|TBD)'
 
@@ -106,7 +130,17 @@ add_file() {
 emit '# AI Context Package'
 emit ''
 emit "- Repository: $REPO_ROOT"
-if [ "$MINIMAL" -eq 1 ]; then
+if [ -n "$ROLE" ]; then
+  ROLE_NAME="$(printf '%s' "$ROLE" | tr '[:upper:]' '[:lower:]' | sed 's/\.md$//')"
+  ROLE_REL=".ai/agents/$ROLE_NAME.md"
+  if [ ! -f "$REPO_ROOT/$ROLE_REL" ]; then
+    echo "Role definition not found: $ROLE_REL" >&2
+    exit 1
+  fi
+  emit "- Scope: ROLE ($ROLE_NAME) -- focused role packet for subagent execution."
+  add_file "$ROLE_REL"
+  add_file ".ai/context/constraints.md"
+elif [ "$MINIMAL" -eq 1 ]; then
   emit '- Scope: MINIMAL -- the work only. The receiving agent is expected to load the'
   emit '  contract and context itself, exactly as any session in this project does.'
 else
@@ -125,7 +159,7 @@ CORE_FILES=(
 )
 # Full mode repeats what every session already loads. That is right for a transfer into an
 # environment that cannot be trusted to read CLAUDE.md, and pure waste inside this project.
-if [ "$MINIMAL" -eq 0 ]; then
+if [ "$MINIMAL" -eq 0 ] && [ -z "$ROLE" ]; then
   for f in "${CORE_FILES[@]}"; do add_file "$f"; done
 fi
 

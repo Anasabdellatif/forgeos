@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The local ForgeOS command surface. POSIX counterpart of forgeos.ps1.
 #
-# A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next` and `prompt` describe the PROJECT,
+# A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next`, `prompt` and `brief` describe the PROJECT,
 # so they route to project-status and add nothing: the reading, the schema and the flags belong to
 # that one command, and a second place that read the same files would be a second answer waiting to
 # disagree. `doctor` and `version` describe the INSTALLATION, so they are implemented here -- neither
@@ -16,7 +16,7 @@
 # refuses a target that has never adopted. Nothing here touches the network: the source is always
 # this checkout, so there is no channel, no fetch and no version discovery.
 #
-# Usage: forgeos.sh <status|next|prompt|doctor|version|adopt|update> [--json]
+# Usage: forgeos.sh <status|next|prompt|brief|doctor|version|adopt|update> [--json] [--brief]
 # Exit 0 reported; 1 usage error or could not run; 2 is reserved by the house convention for a gate
 # refusal and no command here can produce one.
 
@@ -40,6 +40,9 @@ Usage:
   forgeos prompt  [--json]   the complete package for the next work session: session, model,
                              effort, scope, policy, and a paste-ready prompt. Refuses to invent:
                              missing context is named instead of guessed.
+  forgeos brief   [--json]   the same package cut to at most 800 tokens: session, state,
+                             capability, guardrails, and a paste-ready brief. Same refusals.
+                             Also reachable as: forgeos prompt --brief
   forgeos doctor  [--json]   whether this ForgeOS installation can run
   forgeos version [--json]   which ForgeOS this is, and where it sits
   forgeos adopt  --target <path> [--apply] [--json]
@@ -58,11 +61,12 @@ USAGEEOF
 }
 
 CMD="${1:-}"
-JSON=0; APPLY=0; TARGET=''
+JSON=0; APPLY=0; BRIEF=0; TARGET=''
 shift 2>/dev/null || true
 while [ $# -gt 0 ]; do
   case "$1" in
     --json) JSON=1 ;;
+    --brief) BRIEF=1 ;;
     --apply) APPLY=1 ;;
     --target) shift; TARGET="${1:-}" ;;
     --target=*) TARGET="${1#--target=}" ;;
@@ -82,9 +86,14 @@ if [ "$CMD" != 'adopt' ] && [ "$CMD" != 'update' ]; then
     echo "--target is only valid for 'forgeos adopt' and 'forgeos update'." >&2; echo '' >&2; usage >&2; exit 1
   fi
 fi
+# --brief changes which section prompt routes to; on any other command it would be silently ignored,
+# and a flag that is accepted and does nothing is the usage error this wrapper exists to name.
+if [ "$BRIEF" -eq 1 ] && [ "$CMD" != 'prompt' ] && [ "$CMD" != 'brief' ]; then
+  echo "--brief is only valid for 'forgeos prompt' (and is what 'forgeos brief' means)." >&2; echo '' >&2; usage >&2; exit 1
+fi
 
 case "$CMD" in
-  status|next|prompt)
+  status|next|prompt|brief)
     [ -f "$STATUS" ] || {
       echo "Cannot run: project-status.sh is missing from $HERE" >&2
       echo 'Run "forgeos doctor" for the full picture.' >&2
@@ -93,7 +102,12 @@ case "$CMD" in
     args=()
     [ "$JSON" -eq 1 ] && args+=('--json')
     [ "$CMD" = 'next' ] && args+=('--section' 'next')
-    [ "$CMD" = 'prompt' ] && args+=('--section' 'prompt')
+    # `brief` and `prompt --brief` are one section by two names, so they cannot drift apart.
+    if [ "$CMD" = 'brief' ] || { [ "$CMD" = 'prompt' ] && [ "$BRIEF" -eq 1 ]; }; then
+      args+=('--section' 'brief')
+    elif [ "$CMD" = 'prompt' ]; then
+      args+=('--section' 'prompt')
+    fi
     bash "$STATUS" ${args[@]+"${args[@]}"}
     exit $?
     ;;

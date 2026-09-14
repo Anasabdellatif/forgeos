@@ -3,8 +3,8 @@
     The local ForgeOS command surface. Windows counterpart of forgeos.sh.
 
 .DESCRIPTION
-    A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next` and `prompt` describe the
-    PROJECT, so they route to project-status and add nothing: the reading, the schema and the flags
+    A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next`, `prompt` and `brief` describe
+    the PROJECT, so they route to project-status and add nothing: the reading, the schema and the flags
     belong to that one command, and a second place that read the same files would be a second
     answer waiting to disagree. `doctor` and `version` describe the INSTALLATION, so they are
     implemented here -- neither duplicates the engine, and neither could route to a command that
@@ -20,10 +20,13 @@
     this checkout, so there is no channel, no fetch and no version discovery.
 
 .PARAMETER Command
-    status, next, doctor, version, adopt, or update.
+    status, next, prompt, brief, doctor, version, adopt, or update.
 
 .PARAMETER Json
     Emit JSON on stdout and nothing else.
+
+.PARAMETER Brief
+    prompt only: the same package cut to at most 800 tokens -- identical to `forgeos brief`.
 
 .PARAMETER Target
     adopt and update only: the project to sync the blueprint into.
@@ -39,6 +42,8 @@ param(
     [Parameter(Position = 0)]
     [string]$Command = '',
     [switch]$Json,
+    # prompt only: route to the brief section instead. `forgeos brief` says the same thing shorter.
+    [switch]$Brief,
     # adopt only. -Apply is the single writing mode in this file and must be typed to happen.
     [string]$Target = '',
     [switch]$Apply,
@@ -87,6 +92,9 @@ function Show-Usage {
         '  forgeos prompt  [--json]   the complete package for the next work session: session, model,',
         '                             effort, scope, policy, and a paste-ready prompt. Refuses to invent:',
         '                             missing context is named instead of guessed.',
+        '  forgeos brief   [--json]   the same package cut to at most 800 tokens: session, state,',
+        '                             capability, guardrails, and a paste-ready brief. Same refusals.',
+        '                             Also reachable as: forgeos prompt --brief',
         '  forgeos doctor  [--json]   whether this ForgeOS installation can run',
         '  forgeos version [--json]   which ForgeOS this is, and where it sits',
         '  forgeos adopt  -Target <path> [-Apply] [-Json]',
@@ -121,6 +129,14 @@ if ($Command -ne 'adopt' -and $Command -ne 'update') {
         exit 1
     }
 }
+# -Brief changes which section prompt routes to; on any other command it would be silently ignored,
+# and a flag that is accepted and does nothing is the usage error this wrapper exists to name.
+if ($Brief -and $Command -ne 'prompt' -and $Command -ne 'brief') {
+    [Console]::Error.WriteLine("-Brief is only valid for 'forgeos prompt' (and is what 'forgeos brief' means).")
+    [Console]::Error.WriteLine('')
+    Show-Usage | ForEach-Object { [Console]::Error.WriteLine($_) }
+    exit 1
+}
 
 # `-h` and `--help` start with a dash, so the binder hands them to $Rest instead of to $Command and
 # the unknown-option guard below swallowed them: `forgeos --help` exited 1 saying "Unknown option"
@@ -140,7 +156,7 @@ if (@($Rest | Where-Object { $_ }).Count -gt 0) {
 }
 
 switch ($Command) {
-    { $_ -in @('status', 'next', 'prompt') } {
+    { $_ -in @('status', 'next', 'prompt', 'brief') } {
         if (-not (Test-Path -LiteralPath $statusCmd)) {
             [Console]::Error.WriteLine("Cannot run: project-status.ps1 is missing from $here")
             [Console]::Error.WriteLine('Run "forgeos doctor" for the full picture.')
@@ -149,7 +165,9 @@ switch ($Command) {
         $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $statusCmd)
         if ($Json) { $argv += '-Json' }
         if ($Command -eq 'next') { $argv += @('-Section', 'next') }
-        if ($Command -eq 'prompt') { $argv += @('-Section', 'prompt') }
+        # `brief` and `prompt -Brief` are one section by two names, so they cannot drift apart.
+        if ($Command -eq 'brief' -or ($Command -eq 'prompt' -and $Brief)) { $argv += @('-Section', 'brief') }
+        elseif ($Command -eq 'prompt') { $argv += @('-Section', 'prompt') }
         & powershell.exe @argv
         exit $LASTEXITCODE
     }

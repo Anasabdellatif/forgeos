@@ -45,8 +45,9 @@ gained a write path would have to change them, and a self-test case fails if any
 | `validation-plan` | What must pass before that slice is done | **implemented**, as `validationPlan` |
 | `implementation-prompt` | A copy-paste prompt generated from repository state | **implemented**, as `generatedPrompt` |
 | `session-package` | Everything a coordinator would be asked for the next session: session, model, effort, scope, policy, reading order, report shape, and a paste-ready prompt | **implemented**, as `forgeos prompt` / `--section prompt` |
+| `session-brief` | The same package cut to what a session must not get wrong, under a measured budget of 800 tokens (UTF-8 bytes / 4), with the same refusals | **implemented**, as `forgeos brief` / `forgeos prompt --brief` / `--section brief` |
 
-All seven are one command today. They are named separately because they answer separate questions and
+All eight are one command today. They are named separately because they answer separate questions and
 may become separate entry points; splitting them later changes no field.
 
 ## The `forgeos` command
@@ -54,10 +55,11 @@ may become separate entry points; splitting them later changes no field.
 `forgeos` is the surface a person types, and it splits along one line: **a command about the
 project routes; a command about the installation does not.**
 
-`status`, `next` and `prompt` describe the **project**, so they route to `project-status` and add nothing —
-the reading, the schema and the safety flags stay in one place. A wrapper that reformatted would be
-a second answer waiting to disagree with the first, and a self-test case asserts each routed command
-is byte-identical to the engine it routes to.
+`status`, `next`, `prompt` and `brief` describe the **project**, so they route to `project-status` and
+add nothing — the reading, the schema and the safety flags stay in one place. A wrapper that
+reformatted would be a second answer waiting to disagree with the first, and a self-test case asserts
+each routed command is byte-identical to the engine it routes to. `brief` and `prompt --brief` are one
+section under two names, so they cannot drift apart either.
 
 `doctor` and `version` describe the **installation**, so they are implemented in the wrapper. Neither
 duplicates the engine, and neither could sensibly route to a command that may itself be the missing
@@ -72,6 +74,7 @@ here that can write, and only when `--apply` is typed.
 bash scripts/command/forgeos.sh status            # where this project is
 bash scripts/command/forgeos.sh next --json       # what to do next, machine-readable
 bash scripts/command/forgeos.sh prompt            # the complete next-session package
+bash scripts/command/forgeos.sh brief             # the same package, cut to <= 800 tokens
 bash scripts/command/forgeos.sh doctor            # whether this installation can run
 bash scripts/command/forgeos.sh version           # which ForgeOS this is
 bash scripts/command/forgeos.sh adopt  --target <path>   # first-time adoption   (dry run)
@@ -97,6 +100,7 @@ bash scripts/command/project-status.sh                    # human-readable, to s
 bash scripts/command/project-status.sh --json             # JSON only, to stdout
 bash scripts/command/project-status.sh --section next     # the recommendation half alone
 bash scripts/command/project-status.sh --section prompt   # the complete next-session package
+bash scripts/command/project-status.sh --section brief    # the same package, cut to <= 800 tokens
 ```
 
 ```powershell
@@ -104,7 +108,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-stat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Json
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Section next
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Section prompt
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/command/project-status.ps1 -Section brief
 ```
+
+`--section brief` is the package **cut to what a session must not get wrong**: session name, model
+and effort from the same policy table, the single-agent rule, repository / branch / HEAD / version /
+state, the capability and the row that defines it, a read-first list, the pre-checks, the governance
+verdict, the allowed scope with a protected-path *summary* instead of the full list, the narrow and
+full validation commands, the one-line large-session economy protocol (`.ai/contract/economy.md`
+§4 — the same bullets appear in `prompt`), the whole `Do not` list, the report checklist, and "do
+not push". It is a
+projection of package fields — it computes no fact of its own — so it refuses on exactly the same
+missing sources, with exit 1. Its subset schema is `forgeos.project-brief/1`, and it carries a
+`budget` object: `bytes`, `estimatedTokens` (UTF-8 bytes / 4, rounded up, the estimate
+`.ai/contract/economy.md` §3 prescribes), `maxTokens` (800), and `withinBudget`. The human output is
+one header line, the brief, one footer — a self-test case asserts the whole of it fits 3,200 bytes on
+the adopted-shape fixture. The wrapper reaches it as `forgeos brief` and as `forgeos prompt --brief`.
+
+**The brief names a blocked capability as blocked.** Its `Blocked:` line carries the same blockers
+`next` reports — a `Blocked by` entry in the state ledger, unauthorized code writes, an active task,
+or every roadmap row skipped on an unmet prerequisite — and `nextRecommendation.blockers` carries
+them in the JSON. When blocked, an `Alternative:` line follows and an `alternative` object
+(`searched`, `found`, `source`, `candidates`) says what it is: the task records already written in
+`.ai/tasks/inbox/`, offered as candidates whose own `Blocked` section still has to be read, or the
+plain statement that none was found in repository state. The brief never ranks roadmap rows, never
+infers "maintenance" work, and never names a slice nobody wrote down — a blocked project gets a
+named blocker and an honest "none found", not a guess. `prompt` prints neither line.
 
 `--section next` exists so the wrapper can ask for a subset instead of re-parsing this command's
 output. One emitter, one place. The subset carries its **own** schema id,

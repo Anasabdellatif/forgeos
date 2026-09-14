@@ -8,12 +8,18 @@ allowed-tools: Read, Bash
 
 Flags, safety behavior, and when a package is worth building: `scripts/ai/README.md`.
 
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/build-context.ps1 -TaskPath "<task>" -PlanPath "<plan>"
-```
+Full package for session transfer:
 
 ```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/build-context.ps1 -TaskPath "<task>" -PlanPath "<plan>"
 bash scripts/ai/build-context.sh --task "<task>" --plan "<plan>"
+```
+
+Subagent role packet (saves ~75% context tokens):
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ai/build-context.ps1 -Role <role>
+bash scripts/ai/build-context.sh --role <role>
 ```
 
 Do not build one inside a session where the files are already loaded — that is redundant context,

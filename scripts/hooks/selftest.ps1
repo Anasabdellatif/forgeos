@@ -24,6 +24,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('Verbose') -and $PSBoundParameters['Verbose']) {
+    $Compact = $false
+} elseif (-not $PSBoundParameters.ContainsKey('Compact')) {
+    $Compact = $true
+}
 
 $hookDir = $PSScriptRoot
 $results = [System.Collections.Generic.List[psobject]]::new()
@@ -2552,13 +2557,13 @@ try {
     # Model and effort come from scripts/lib/session-policy.json -- a data table, first match wins
     # -- and changing the capability changes the category without touching a line of engine code.
     $pkOk = 0
-    if ($pkg1 -cmatch '(?m)^    model +Fable$') { $pkOk++ }
-    if ($pkg1 -cmatch '(?m)^    effort +Ultracode$') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    model +frontier$') { $pkOk++ }
+    if ($pkg1 -cmatch '(?m)^    effort +max$') { $pkOk++ }
     if ($pkg1 -cmatch '(?m)^    category +public-release-history-ci-security$') { $pkOk++ }
     Set-Pp2Roadmap -Criterion 'Update the adopted blueprint'
     $pkg2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
     if ($pkg2 -cmatch '(?m)^    model +a fast capable model$') { $pkOk++ }
-    if ($pkg2 -cmatch '(?m)^    effort +Medium$') { $pkOk++ }
+    if ($pkg2 -cmatch '(?m)^    effort +medium$') { $pkOk++ }
     if ($pkg2 -cmatch '(?m)^    category +adoption-update$') { $pkOk++ }
     Assert-ExitCode -Case 'prompt package: model and effort come from the policy table' -Expected 6 -Actual $pkOk
 
@@ -2630,6 +2635,105 @@ try {
     if (([regex]::Matches($pkg3, '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)":\s*false')).Count -eq 3) { $pkOk++ }
     Assert-ExitCode -Case 'prompt package: the JSON carries the contract and the safety flags are false' -Expected 6 -Actual $pkOk
 
+    # --- the session brief (-Section brief) ---------------------------------------------------
+    # The brief is the package cut to what a session must not get wrong, under a measured budget.
+    # The wrapper reaches it two ways -- `forgeos brief` and `forgeos prompt -Brief` -- and both
+    # must be byte-identical to the engine, or "compact" would be a third answer. Host-aware like
+    # the package case: the shape is asserted, never this repository's own roadmap state.
+    $brOk = 0
+    $brFg = Invoke-Forgeos -Arguments @('brief')
+    $brFgCode = $LASTEXITCODE
+    $brFg2 = Invoke-Forgeos -Arguments @('prompt', '-Brief')
+    $brFg2Code = $LASTEXITCODE
+    $brEn = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusCmd -Section brief 2>$null) -join "`n")
+    $brEnCode = $LASTEXITCODE
+    if ($brFg -ceq $brEn -and $brFgCode -eq $brEnCode) { $brOk++ }
+    if ($brFg2 -ceq $brEn -and $brFg2Code -eq $brEnCode) { $brOk++ }
+    if ((Invoke-Forgeos -Arguments @('--help')) -match 'forgeos brief') { $brOk++ }
+    $prevBrEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $forgeosCmd brief -Apply 2>$null 1>$null
+    if ($LASTEXITCODE -eq 1) { $brOk++ }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $forgeosCmd status -Brief 2>$null 1>$null
+    if ($LASTEXITCODE -eq 1) { $brOk++ }
+    $ErrorActionPreference = $prevBrEap
+    if ($pkgNextJson -match '"capability":\s*"unknown"') {
+        if ($brEnCode -eq 1 -and $brEn -cmatch 'cannot generate') { $brOk++ }
+    } else {
+        if ($brEnCode -eq 0 -and $brEn -cmatch '# ForgeOS brief -- ') { $brOk++ }
+    }
+    Assert-ExitCode -Case 'brief package: the wrapper routes brief and prompt --brief to the engine and they agree' -Expected 6 -Actual $brOk
+
+    # Under a named capability the brief is generated, carries its own schema, and fits the budget it
+    # declares -- measured on the WHOLE human output, not only the prompt inside it, in UTF-8 bytes / 4,
+    # the contract's own estimate. The fixture is the adopted shape, so the number is the blueprint's
+    # floor rather than this repository's.
+    Set-Pp2Roadmap -Criterion 'Harden the release workflow security'
+    $brf1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief 2>$null) -join "`n")
+    $brf1Code = $LASTEXITCODE
+    $brf2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief -Json 2>$null) -join "`n")
+    $brf2Code = $LASTEXITCODE
+    $brOk = 0
+    if ($brf1Code -eq 0 -and $brf2Code -eq 0) { $brOk++ }
+    if ([System.Text.Encoding]::UTF8.GetByteCount(($brf1 -replace "`r`n", "`n")) -le 3200) { $brOk++ }
+    if ($brf1 -cmatch '(?m)^Session: pp2 - Harden the release workflow security \| new session: true \| model: frontier \| effort: max$') { $brOk++ }
+    if ($brf1 -cmatch 'Stop after the local commit and report\. Do not push\.') { $brOk++ }
+    if ($brf2 -cmatch '"schema":\s*"forgeos\.project-brief/1"' -and $brf2 -cmatch '"generated":\s*true') { $brOk++ }
+    if ($brf2 -cmatch '"maxTokens":\s*800' -and $brf2 -cmatch '"withinBudget":\s*true' -and
+        ([regex]::Matches($brf2, '"can(ModifyFiles|AuthorizeCode|OpenGovernanceWindow)":\s*false')).Count -eq 3) { $brOk++ }
+    # The large-session protocol line: a brief within budget once launched a session that still hit its
+    # usage limit, so the brief now carries the whole-session bound, and the full package the same bullets.
+    $brfPkg = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
+    if ($brf1 -cmatch '(?m)^Economy: large-session protocol, \.ai/contract/economy\.md section 4 -- ' -and
+        $brfPkg -cmatch '(?m)^Economy -- the large-session protocol \(\.ai/contract/economy\.md section 4\):$') { $brOk++ }
+    Assert-ExitCode -Case 'brief package: a named capability yields a brief inside its 800-token budget' -Expected 7 -Actual $brOk
+
+    # Missing context refuses by name on the brief too: a short prompt around an invented capability
+    # would be the cheapest possible way to send a session in the wrong direction.
+    $brOk = 0
+    $brr1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp3Script -Section brief 2>$null) -join "`n")
+    $brr1Code = $LASTEXITCODE
+    $brr2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp3Script -Section brief -Json 2>$null) -join "`n")
+    $brr2Code = $LASTEXITCODE
+    if ($brr1Code -eq 1) { $brOk++ }
+    if ($brr1 -cmatch 'cannot generate' -and $brr1 -cmatch 'docs/roadmap\.md') { $brOk++ }
+    if ($brr1 -cnotmatch '# ForgeOS brief -- ') { $brOk++ }
+    if ($brr2Code -eq 1 -and $brr2 -cmatch '"generated":\s*false') { $brOk++ }
+    Assert-ExitCode -Case 'brief package: missing context is named, never invented' -Expected 4 -Actual $brOk
+
+    # A blocked capability is named IN the brief, with the blocker the engine already knew: three
+    # cold sessions on one adopted project each rediscovered a ledger blocker by hand because the
+    # brief kept it to itself. The alternative is never invented -- with an empty inbox the brief
+    # says none was found; with a task record someone already wrote, that record is offered as a
+    # candidate to check, not as a choice made. The full package is untouched by either state.
+    Set-Content -LiteralPath (Join-Path $pp2 '.ai\context\current-state.md') -Encoding UTF8 -Value @(
+        '# Current State', '', '## Position', '',
+        '- Now: building the first capability', '- Next: the roadmap names it', '- Blocked by: an owner decision on visibility')
+    $brb1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief 2>$null) -join "`n")
+    $brb1Code = $LASTEXITCODE
+    $brb2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief -Json 2>$null) -join "`n")
+    $brb2Code = $LASTEXITCODE
+    New-Item -ItemType Directory -Path (Join-Path $pp2 '.ai\tasks\inbox') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $pp2 '.ai\tasks\inbox\2026-01-01-refresh-the-ledger.md') -Encoding UTF8 -Value '# Task: Refresh the ledger'
+    $brb3 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief 2>$null) -join "`n")
+    $brb4 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section brief -Json 2>$null) -join "`n")
+    $pkgBlocked = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
+    Remove-Item -LiteralPath (Join-Path $pp2 '.ai\tasks') -Recurse -Force
+    Set-Content -LiteralPath (Join-Path $pp2 '.ai\context\current-state.md') -Encoding UTF8 -Value @(
+        '# Current State', '', '## Position', '',
+        '- Now: building the first capability', '- Next: the roadmap names it', '- Blocked by: none')
+    $brOk = 0
+    if ($brb1Code -eq 0 -and $brb2Code -eq 0) { $brOk++ }
+    if ($brb1 -cmatch '(?m)^Blocked: yes -- the state ledger names a blocker: an owner decision on visibility' -and
+        $brb1 -cmatch '(?m)Do not start the capability above while a blocker stands\.$') { $brOk++ }
+    if ($brb1 -cmatch '(?m)^Alternative: none found in repository state -- \.ai/tasks/inbox/ holds no task record, and this command does not invent one') { $brOk++ }
+    if ($brb2 -cmatch '"blocked":\s*true' -and $brb2 -cmatch '"the state ledger names a blocker: an owner decision on visibility"' -and
+        $brb2 -cmatch '"searched":\s*true' -and $brb2 -cmatch '"found":\s*false') { $brOk++ }
+    if ($brb3 -cmatch '(?m)^Alternative: not chosen here -- 1 task record\(s\) already written in \.ai/tasks/inbox/ \(2026-01-01-refresh-the-ledger\.md\); read each record' -and
+        $brb4 -cmatch '"found":\s*true' -and $brb4 -cmatch '"candidates":\s*\[\s*"2026-01-01-refresh-the-ledger\.md"\s*\]') { $brOk++ }
+    if ($pkgBlocked -cnotmatch 'Blocked: yes' -and $pkgBlocked -cnotmatch 'Alternative:') { $brOk++ }
+    Assert-ExitCode -Case 'brief package: a blocked capability names its blocker and invents no alternative' -Expected 6 -Actual $brOk
+
     # The policy table's one-category-per-line contract is enforced, on both shells: a reformatted
     # table -- an editor's format-on-save is enough -- once made the line-wise POSIX parser pick a
     # category with an empty model and exit 0 while this shell answered correctly. Failing OPEN on
@@ -2637,8 +2741,8 @@ try {
     # so malformed means a named refusal, identically, everywhere.
     Set-Content -LiteralPath (Join-Path $pp2 'scripts\lib\session-policy.json') -Encoding UTF8 -Value @(
         '{', '  "schema": "forgeos.session-policy/1",', '  "categories": [', '    {',
-        '      "key": "implementation-default",', '      "model": "Fable",',
-        '      "effort": "Max",', '      "reason": "x"', '    }', '  ]', '}')
+        '      "key": "implementation-default",', '      "model": "frontier",',
+        '      "effort": "high",', '      "reason": "x"', '    }', '  ]', '}')
     $pkg4 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt 2>$null) -join "`n")
     $pkg4Code = $LASTEXITCODE
     $pkg5 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $pp2Script -Section prompt -Json 2>$null) -join "`n")

@@ -10,10 +10,8 @@ project the only permitted activity is the discovery interview. No code, no scaf
 dependency, no technology choice, no active task — regardless of what is asked.
 
 Confirm with `scripts/validation/check-placeholders`; more than 0 blocking markers means
-discovery mode. Then load `.ai/contract/discovery.md` and begin at Phase 1.
-
-An agent that fills a brief's gaps with plausible defaults produces a project nobody chose. Ask
-instead. → `.ai/contract/discovery.md`
+discovery mode. Then load `.ai/contract/discovery.md` and begin at Phase 1. An agent that fills a
+brief's gaps with plausible defaults produces a project nobody chose. Ask instead.
 
 ## 1. Instruction Priority
 
@@ -144,9 +142,7 @@ truth, report the conflict, correct the stale side as part of approved work.
 
 The goal is not minimum tokens. It is the **smallest sufficient context for a correct, safe, and
 verifiable result**. Never reduce context so far that correctness, security, or an acceptance
-criterion becomes uncertain.
-
-Token frugality is a primary engineering constraint:
+criterion becomes uncertain. Token frugality is a primary engineering constraint:
 
 - Do not dump entire directories or repository-wide file trees into context. Use targeted searches.
 - Run validation in compact mode (`--compact`) unless verbose output is specifically required.

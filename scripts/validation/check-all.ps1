@@ -86,7 +86,7 @@ function Invoke-Check {
     $results.Add([pscustomobject]@{ Name = $Name; Code = $code; Gating = [bool]$Gating; Status = $status })
 }
 
-$selftestArgs = if ($IsCompact) { @('-Compact') } else { @() }
+$selftestArgs = if ($IsCompact) { @('-Compact') } else { @('-Verbose') }
 
 Invoke-Check -Name 'structure'     -Path 'scripts\validation\check-structure.ps1'    -Arguments @('-Quiet') -Gating
 Invoke-Check -Name 'empty-files'   -Path 'scripts\validation\check-empty-files.ps1'  -Gating

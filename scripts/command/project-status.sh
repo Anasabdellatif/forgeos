@@ -9,8 +9,9 @@
 # guessed. A string becomes "unknown", a number becomes null -- because zero tasks and no task
 # directory are different facts -- and the source is named in missingSources.
 #
-# Usage: project-status.sh [--json] [--section all|next|prompt]
-# Exit 0 reported; 1 the repository is unreadable, or --section prompt refuses to invent facts.
+# Usage: project-status.sh [--json] [--section all|next|prompt|brief]
+# Exit 0 reported; 1 the repository is unreadable, or --section prompt / --section brief refuses to
+# invent facts.
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -31,8 +32,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$SECTION" in
-  all|next|prompt) ;;
-  *) echo "Unknown section: $SECTION (expected 'all', 'next' or 'prompt')" >&2; exit 1 ;;
+  all|next|prompt|brief) ;;
+  *) echo "Unknown section: $SECTION (expected 'all', 'next', 'prompt' or 'brief')" >&2; exit 1 ;;
 esac
 
 [ -d "$REPO_ROOT" ] || { echo "Cannot read the repository root: $REPO_ROOT" >&2; exit 1; }
@@ -265,6 +266,7 @@ for d in migrations db/migrations database/migrations supabase/migrations prisma
 done
 
 t_active_names="$(list_docs "$REPO_ROOT/.ai/tasks/active")"
+t_inbox_names="$(list_docs "$REPO_ROOT/.ai/tasks/inbox")"
 t_recent_done="$(list_docs "$REPO_ROOT/.ai/tasks/completed" | tail -1)"
 next_slice_active='false'
 [ "$t_active" != 'null' ] && [ "${t_active:-0}" -gt 0 ] && next_slice_active='true'
@@ -944,6 +946,17 @@ Validation:
 - full: $vp_first_full
 - ShellCheck must come from CI: $vp_ci
 
+Economy -- the large-session protocol (.ai/contract/economy.md section 4):
+
+- effort is depth per decision, never a licence for broad reads or repeated validation
+- read specifications by the section the slice names, never a whole chapter; say why before any read over ~200 lines
+- run the full suite once, on the final diff; re-run only after a change to what it covers
+- run the other shell, selftest, and the release selftest only when shell scripts, hooks, or cross-platform tooling changed
+- replay a SQL or database rehearsal only when SQL changed after the last successful one
+- never edit while a long check runs
+- use compact output; summarize a result in a line or two instead of pasting the log
+- after a third full-suite run, a second rehearsal, or a context too large to hold the diff: stop, refresh the ledger, hand off, report
+
 Do not:
 
 $dn
@@ -955,6 +968,95 @@ $(printf '%s\n' "$pkg_report" | sed 's/^/- /')
 Stop after the local commit and report. Do not push.
 PKGPROMPTEOF
 )"
+
+# --- the session brief (--section brief) ----------------------------------------------------------
+# The same facts as the package, cut to what a session must not get wrong, under a hard budget: 800
+# tokens at the contract's own chars / 4 estimate (.ai/contract/economy.md section 3), measured in
+# UTF-8 bytes so both shells count the same thing. Nothing here is a new fact -- every line is a
+# projection of a package field -- so the brief can never say what the package would refuse to say,
+# and it refuses on exactly the same missing sources.
+brief_max_tokens=800
+brief_read=''
+add_brief_read() {   # add_brief_read <relative path> -- listed only when it exists
+  [ -f "$REPO_ROOT/$1" ] || return 0
+  if [ -z "$brief_read" ]; then brief_read="$1"; else brief_read="$brief_read
+$1"; fi
+}
+add_brief_read '.ai/context/current-state.md'
+add_brief_read '.ai/context/constraints.md'
+add_brief_read 'docs/roadmap.md'
+if [ -n "$t_active_names" ]; then
+  while IFS= read -r tn; do
+    [ -n "$tn" ] && add_brief_read ".ai/tasks/active/$tn"
+  done <<< "$t_active_names"
+fi
+brief_protected="$(printf '%s\n' "$pkg_forbidden" | grep ' -- protected by ' | sed 's/ -- .*//')"
+brief_protected_count="$(printf '%s\n' "$brief_protected" | grep -c .)"
+if [ "$brief_protected_count" -gt 0 ]; then
+  brief_sample="$(printf '%s\n' "$brief_protected" | head -3 | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+  [ "$brief_protected_count" -gt 3 ] && brief_sample="$brief_sample, ..."
+  brief_forbidden="$brief_protected_count protected path(s) in .ai/context/governance.json ($brief_sample) and anything a \"Do not\" entry names"
+else
+  brief_forbidden='no protected paths are declared in .ai/context/governance.json; anything a "Do not" entry names'
+fi
+brief_now="${s_now:-unknown}"
+brief_read_text="$(printf '%s\n' "$brief_read" | grep . | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+[ -z "$brief_read_text" ] && brief_read_text='none of the ledger, constraints, or roadmap exists yet'
+brief_do_not="$(printf '%s\n' "$dn" | sed 's/^- //')"
+# The blocked state, in the brief itself. The engine already knew every blocker and reported it to
+# `next`; the brief said nothing, and three cold sessions on one adopted project each spent 6-9
+# targeted reads rediscovering a blocker the ledger had named. The alternative is the one thing the
+# repository has already written down -- a task record waiting in .ai/tasks/inbox/ -- offered as a
+# candidate to check, never as a choice made; with no record, the brief says so rather than invent
+# a slice. Nothing here ranks roadmap rows or infers "maintenance" work: that would be a guess.
+brief_alt_found='false'; brief_alt_source='none'; brief_alt_candidates=''
+if [ "$rec_blocked" = 'true' ]; then
+  brief_blockers_text="$(printf '%s\n' "$rec_blockers" | awk 'NF { a = a (a ? "; " : "") $0 } END { print a }')"
+  brief_blocked_text="Blocked: yes -- $brief_blockers_text. Do not start the capability above while a blocker stands."
+  brief_inbox_count="$(printf '%s\n' "$t_inbox_names" | grep -c .)"
+  if [ "$brief_inbox_count" -gt 0 ]; then
+    brief_alt_found='true'; brief_alt_source='.ai/tasks/inbox'; brief_alt_candidates="$t_inbox_names"
+    brief_inbox_list="$(printf '%s\n' "$t_inbox_names" | awk 'NF { a = a (a ? ", " : "") $0 } END { print a }')"
+    brief_blocked_text="$brief_blocked_text
+Alternative: not chosen here -- $brief_inbox_count task record(s) already written in .ai/tasks/inbox/ ($brief_inbox_list); read each record's Blocked section before activating one."
+  else
+    brief_blocked_text="$brief_blocked_text
+Alternative: none found in repository state -- .ai/tasks/inbox/ holds no task record, and this command does not invent one; ask the owner to clear the blocker or to name a maintenance or evidence slice."
+  fi
+else
+  brief_blocked_text='Blocked: no -- proceed with the capability above.'
+fi
+brief_prompt="$(cat <<BRIEFEOF
+# ForgeOS brief -- $prompt_subject
+
+Session: $pkg_session_name | new session: $pkg_new_session | model: $pkg_model | effort: $pkg_effort
+Execution: single-agent only -- no subagents, review swarms, or background task loops.
+Repository: $repo_name @ $branch | HEAD $commit | version $bp_version | state $project_state
+Now: $brief_now
+Capability: $rec_capability -- its acceptance criteria are its row in $rec_source; read that row before writing anything.
+$brief_blocked_text
+
+Read first: $brief_read_text
+The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.
+
+Pre-checks: clean tree on $branch; HEAD is $commit; version is $bp_version; reproduce any defect before fixing it.
+Governance: $gov_line
+Scope: allowed -- $pkg_allowed. Forbidden -- $brief_forbidden.
+Validation: narrow -- $vp_first_narrow; full -- $vp_first_full; ShellCheck from CI: $vp_ci
+Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.
+
+Do not:
+
+$dn
+
+Report: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.
+Stop after the local commit and report. Do not push.
+BRIEFEOF
+)"
+brief_bytes="$(printf '%s' "$brief_prompt" | wc -c | tr -d ' ')"
+brief_tokens=$(( (brief_bytes + 3) / 4 ))
+brief_within='false'
+[ "$brief_tokens" -le "$brief_max_tokens" ] && brief_within='true'
 
 # --- output ---------------------------------------------------------------------------------------
 jesc() {   # minimal JSON string escaping: backslash, quote, and the control characters
@@ -1103,6 +1205,91 @@ PKGREFUSEEOF
   }
 }
 PKGJSONEOF
+  exit 0
+fi
+
+# The brief subset: its own schema id, the same refusal rule as the package, and a measured budget,
+# so "compact" is a number a consumer can check rather than a promise.
+if [ "$JSON" -eq 1 ] && [ "$SECTION" = 'brief' ]; then
+  if [ -n "$pkg_missing" ]; then
+    cat <<BRIEFREFUSEEOF
+{
+  "schema": "forgeos.project-brief/1",
+  "generatedFrom": "repository files only",
+  "generated": false,
+  "missing": $(jarr "$pkg_missing"),
+  "safety": {
+    "canModifyFiles": false,
+    "canAuthorizeCode": false,
+    "canOpenGovernanceWindow": false
+  }
+}
+BRIEFREFUSEEOF
+    exit 1
+  fi
+  cat <<BRIEFJSONEOF
+{
+  "schema": "forgeos.project-brief/1",
+  "generatedFrom": "repository files only",
+  "generated": true,
+  "project": {
+    "identity": $(jstr "$repo_name"),
+    "version": $(jstr "$bp_version"),
+    "branch": $(jstr "$branch"),
+    "commit": $(jstr "$commit"),
+    "state": $(jstr "$project_state")
+  },
+  "nextRecommendation": {
+    "capability": $(jstr "$rec_capability"),
+    "source": $(jstr "$rec_source"),
+    "confidence": $(jstr "$rec_confidence"),
+    "blocked": $rec_blocked,
+    "blockers": $(jarr "$rec_blockers")
+  },
+  "alternative": {
+    "searched": $rec_blocked,
+    "found": $brief_alt_found,
+    "source": $(jstr "$brief_alt_source"),
+    "candidates": $(jarr "$brief_alt_candidates")
+  },
+  "session": {
+    "newSession": $pkg_new_session,
+    "name": $(jstr "$pkg_session_name"),
+    "model": $(jstr "$pkg_model"),
+    "effort": $(jstr "$pkg_effort"),
+    "category": $(jstr "$pkg_category")
+  },
+  "governance": {
+    "windowRequired": $gd_required,
+    "codeAuthorized": $(jstr "$pkg_gov_authorized")
+  },
+  "scope": {
+    "allowed": $(jstr "$pkg_allowed"),
+    "protectedPathCount": $brief_protected_count,
+    "protectedPathsSource": ".ai/context/governance.json"
+  },
+  "readFirst": $(jarr "$brief_read"),
+  "validationPlan": {
+    "narrow": $(jstr "$vp_first_narrow"),
+    "full": $(jstr "$vp_first_full"),
+    "ciRequired": $vp_ci
+  },
+  "doNot": $(jarr "$brief_do_not"),
+  "budget": {
+    "bytes": $brief_bytes,
+    "estimatedTokens": $brief_tokens,
+    "maxTokens": $brief_max_tokens,
+    "withinBudget": $brief_within,
+    "method": "UTF-8 bytes / 4, rounded up"
+  },
+  "generatedPrompt": "$(jmul "$brief_prompt")",
+  "safety": {
+    "canModifyFiles": false,
+    "canAuthorizeCode": false,
+    "canOpenGovernanceWindow": false
+  }
+}
+BRIEFJSONEOF
   exit 0
 fi
 
@@ -1270,6 +1457,35 @@ fi
 
 show() { printf '  %-22s %s\n' "$1" "$2"; }
 nz()   { if [ -z "$1" ] || [ "$1" = 'null' ]; then printf 'unknown'; else printf '%s' "$1"; fi; }
+
+# The human half of --section brief: one header line, the brief, one footer -- and nothing else,
+# because every extra line is paid for again by the session that pastes it. It refuses exactly as
+# the package does, on exactly the same missing sources.
+if [ "$SECTION" = 'brief' ]; then
+  echo ''
+  if [ -n "$pkg_missing" ]; then
+    echo "ForgeOS session brief  [$project_state]"
+    echo ''
+    echo '  cannot generate: a brief would have to invent facts, and this command refuses to.'
+    echo ''
+    echo '  missing:'
+    while IFS= read -r pm; do [ -n "$pm" ] && printf '    - %s\n' "$pm"; done <<< "$pkg_missing"
+    echo ''
+    echo '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+    echo ''
+    exit 1
+  fi
+  brief_verdict='within'
+  [ "$brief_within" = 'true' ] || brief_verdict='OVER'
+  printf 'ForgeOS session brief  [%s]  ~%s tokens, %s the %s-token budget (UTF-8 bytes / 4)\n' \
+    "$project_state" "$brief_tokens" "$brief_verdict" "$brief_max_tokens"
+  echo ''
+  printf '%s\n' "$brief_prompt"
+  echo ''
+  echo '  This command reads. It writes nothing, authorizes nothing, and opens no governance window.'
+  echo ''
+  exit 0
+fi
 
 # The human half of --section prompt: the whole package, self-contained, then out. It refuses with
 # exit 1 rather than print a prompt that guesses -- the refusal names every missing file and the

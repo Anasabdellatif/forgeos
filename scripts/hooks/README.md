@@ -101,7 +101,9 @@ per file.
 | other | Non-blocking error. Logged; execution continues. |
 
 All hooks **fail open** on a malformed or unreadable payload. A parsing bug must never wedge a
-session.
+session. That covers the payload only: `guard-discovery` fails **closed** — exit 2, naming the
+file — when the manifest that carries its rules is missing, unreadable, or incomplete, because a
+gate that cannot read its own rules cannot confirm the project is defined.
 
 `scan-secrets` checks `stop_hook_active` before doing anything: a `Stop` hook that exits 2 makes
 Claude continue, so without that guard it would loop forever. The self-test covers it.

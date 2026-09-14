@@ -53,6 +53,23 @@ Implementation is not always the right next move. Delegate when:
 
 Role definitions: `.ai/agents/`.
 
+## Economy — the whole-session bound
+
+The brief bounds the launch; this bounds the session. `.ai/contract/economy.md` §4 is the rule;
+its shape:
+
+- Single agent unless the user authorized more in this conversation (`core.md` §3 rule 9).
+- Read specifications by the section the slice names, never a whole chapter; say why before any
+  read over ~200 lines. The policy effort is depth per decision, not a licence to read broadly.
+- Validate once per change: narrow after each step, the full suite once on the final diff and
+  again only after a change to what it covers. Never edit while a long check runs.
+- The other shell, `selftest`, and the release selftest run only when shell scripts, hooks, or
+  cross-platform tooling changed. A database rehearsal replays only when SQL changed after the last
+  successful one.
+- Compact output; summarize a result in a line or two, never paste the log.
+- Stop in the usage-risk zone — third full-suite run, second rehearsal, a context too large to hold
+  the diff: refresh the ledger, hand off, report.
+
 ## Rules
 
 - Do not expand scope silently.

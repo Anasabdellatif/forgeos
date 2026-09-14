@@ -15,5 +15,12 @@ Get the diff:
 git status && git diff && git diff --staged
 ```
 
-Delegate to the `reviewer` subagent, and to `security-reviewer` when the change touches auth, data,
-input, secrets, execution, or infrastructure. They are independent and can run in parallel.
+Build the subagent role packet (saves ~75% context tokens):
+
+```bash
+powershell -File scripts/ai/build-context.ps1 -Role reviewer
+bash scripts/ai/build-context.sh --role reviewer
+```
+
+Pass the packet and diff when delegating to the `reviewer` subagent. Delegate to `security-reviewer`
+when the change touches auth, data, input, secrets, execution, or infrastructure.

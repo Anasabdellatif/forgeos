@@ -24,6 +24,7 @@ param(
     [string]$TaskPath,
     [string]$PlanPath,
     [string]$OutputPath,
+    [string]$Role,
     [int]$MaxFileBytes = 65536,
     [switch]$IncludeDocumentation,
 
@@ -177,7 +178,18 @@ $script:lines = [System.Collections.Generic.List[string]]::new()
 [void]$script:lines.Add('# AI Context Package')
 [void]$script:lines.Add("")
 [void]$script:lines.Add("- Repository: $repoRoot")
-if ($Minimal) {
+if ($Role) {
+    $roleName = $Role.Trim().ToLower() -replace '\.md$', ''
+    $roleRel = ".ai/agents/$roleName.md"
+    $roleFull = Join-Path -Path $repoRoot -ChildPath $roleRel
+    if (-not (Test-Path -LiteralPath $roleFull -PathType Leaf)) {
+        Write-Error "Role definition not found: $roleRel"
+        exit 1
+    }
+    [void]$script:lines.Add("- Scope: ROLE ($roleName) -- focused role packet for subagent execution.")
+    Add-ContextFile -RepoRoot $repoRoot -Path $roleFull -MaxBytes $MaxFileBytes
+    Add-ContextFile -RepoRoot $repoRoot -Path (Join-Path -Path $repoRoot -ChildPath '.ai/context/constraints.md') -MaxBytes $MaxFileBytes
+} elseif ($Minimal) {
     [void]$script:lines.Add("- Scope: MINIMAL -- the work only. The receiving agent is expected to load the")
     [void]$script:lines.Add("  contract and context itself, exactly as any session in this project does.")
 } else {
@@ -198,7 +210,7 @@ $coreFiles = @(
 # Full mode repeats what every session already loads. That is right for a transfer into an
 # environment that cannot be trusted to read CLAUDE.md, and pure waste inside this project.
 $embedFiles = @()
-if (-not $Minimal) { $embedFiles = $coreFiles }
+if (-not $Minimal -and -not $Role) { $embedFiles = $coreFiles }
 foreach ($relative in $embedFiles) {
     Add-ContextFile -RepoRoot $repoRoot -Path (Join-Path -Path $repoRoot -ChildPath $relative) -MaxBytes $MaxFileBytes
 }

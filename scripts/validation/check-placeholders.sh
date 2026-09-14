@@ -23,56 +23,99 @@ if [ ! -f "$MANIFEST" ]; then
   exit 1
 fi
 
-# Capability, not presence: on Windows/Git Bash a Microsoft Store python3 stub sits on PATH and
-# cannot run anything, so probe with a real parse -- and try python before giving up. Probed only
-# when jq is absent, so the common path pays nothing.
-JSON_PY=''
-if ! command -v jq >/dev/null 2>&1; then
-  for _py in python3 python; do
-    if command -v "$_py" >/dev/null 2>&1 && "$_py" -c 'import json' >/dev/null 2>&1; then
-      JSON_PY="$_py"
-      break
+# --- Manifest reader resolution ---------------------------------------------------------------
+# This script is the discovery gate: .ai/contract/core.md §0 reads "more than 0 blocking markers
+# means discovery mode". A gate that reports 0 because it could not read its manifest fails OPEN
+# -- it tells an agent discovery is complete while .ai/context/ is still nothing but TBD. That is
+# the worst failure mode available to this script, so an unreadable manifest is a hard error and
+# never a zero.
+#
+# The concrete trap: on Windows `python3` resolves to the Microsoft Store alias stub, which prints
+# an install message to stdout and exits without running anything. `command -v python3` succeeds,
+# so a presence check is not enough. Every candidate is probed by actually executing it and
+# checking for a sentinel on stdout -- which rejects the stub without matching its (localized)
+# message text, and rejects any other interpreter that cannot run the reader.
+
+READER=''       # 'jq' or 'python' once resolved
+PY_ARGV=()      # argv prefix of the working Python, e.g. (python) or (py -3)
+
+resolve_reader() {
+  if command -v jq >/dev/null 2>&1 && [ "$(jq -rn '"PROBE_OK"' 2>/dev/null)" = 'PROBE_OK' ]; then
+    READER='jq'
+    return 0
+  fi
+
+  local candidate cand_argv out
+  for candidate in 'python3' 'python' 'py -3'; do
+    read -r -a cand_argv <<< "$candidate"
+    command -v "${cand_argv[0]}" >/dev/null 2>&1 || continue
+    out="$("${cand_argv[@]}" -c 'import json,sys; sys.stdout.write("PROBE_OK")' 2>/dev/null)" || continue
+    if [ "$out" = 'PROBE_OK' ]; then
+      READER='python'
+      PY_ARGV=("${cand_argv[@]}")
+      return 0
     fi
   done
-fi
+
+  return 1
+}
 
 read_manifest() {   # emits "path<TAB>weight<TAB>note" per target, then a marker regex line
-  if command -v jq >/dev/null 2>&1; then
-    jq -r '.placeholderScan.targets[] | [.path, .weight, .note] | @tsv' "$MANIFEST"
-    printf 'MARKERS\t'
-    jq -r '.placeholderScan.markers | join("|")' "$MANIFEST"
-  elif [ -n "$JSON_PY" ]; then
-    "$JSON_PY" -c '
+  case "$READER" in
+    jq)
+      jq -r '.placeholderScan.targets[] | [.path, .weight, .note] | @tsv' "$MANIFEST" || return 1
+      printf 'MARKERS\t'
+      jq -r '.placeholderScan.markers | join("|")' "$MANIFEST" || return 1
+      ;;
+    python)
+      "${PY_ARGV[@]}" -c '
 import json,sys
 d = json.load(open(sys.argv[1]))["placeholderScan"]
 for t in d["targets"]:
     print("\t".join([t["path"], t["weight"], t["note"]]))
 print("MARKERS\t" + "|".join(d["markers"]))
-' "$MANIFEST" | tr -d '\r'
-  else
-    echo "check-placeholders.sh requires jq or a working python3/python to read the manifest." >&2
-    exit 1
-  fi
+' "$MANIFEST" || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
-manifest_lines="$(read_manifest)"
-
-# read_manifest runs inside a command substitution, so its `exit 1` ends that subshell and nothing
-# else. An unread manifest therefore leaves zero scan targets, and this script reports "0 blocking"
-# and "This project is fully adopted" about a project it never looked at. That answer is what the
-# discovery gate in .ai/contract/core.md consults, so a false clean here opens the gate on an
-# undefined project -- the single failure the gate exists to prevent.
-target_count="$(printf '%s' "$manifest_lines" | grep -vc '^MARKERS' || true)"
-if [ "${target_count:-0}" -eq 0 ]; then
-  echo "Cannot read blueprint manifest. Install jq or python3." >&2
-  echo "  manifest : $MANIFEST" >&2
-  echo "  jq       : $(command -v jq || echo MISSING)" >&2
-  echo "  python3  : $(command -v python3 || echo MISSING)" >&2
-  exit 1
+if ! resolve_reader; then
+  {
+    echo 'check-placeholders.sh: no working manifest reader found.'
+    echo 'Tried: jq, python3, python, py -3 -- each was absent or failed to execute.'
+    echo 'On Windows, a bare "python3" is usually the Microsoft Store alias stub, which is not a'
+    echo 'usable interpreter. Install jq or Python, or run check-placeholders.ps1 instead.'
+    echo 'Refusing to continue: this script is the discovery gate and must not report 0 markers'
+    echo 'when it cannot read its own manifest.'
+  } >&2
+  exit 2
 fi
 
-marker_alternation="$(printf '%s' "$manifest_lines" | grep '^MARKERS' | cut -f2)"
-[ -z "$marker_alternation" ] && marker_alternation='TBD|TODO|FIXME'
+if ! manifest_lines="$(read_manifest)"; then
+  echo "check-placeholders.sh: the $READER reader failed on $MANIFEST." >&2
+  echo 'Refusing to continue rather than report an unverified 0.' >&2
+  exit 2
+fi
+
+marker_alternation="$(printf '%s\n' "$manifest_lines" | grep '^MARKERS' | cut -f2)"
+target_lines="$(printf '%s\n' "$manifest_lines" | grep -cv -e '^MARKERS' -e '^[[:space:]]*$')"
+
+# The reader ran, but a reader that emits nothing (or loses the marker list) is indistinguishable
+# from a fully adopted project unless the output itself is validated. So validate it, and record
+# the result -- MANIFEST_READ_OK is what earns the right to report a zero later on.
+MANIFEST_READ_OK=0
+if [ -n "$marker_alternation" ] && [ "$target_lines" -gt 0 ]; then
+  MANIFEST_READ_OK=1
+else
+  echo "check-placeholders.sh: $READER produced unusable manifest output" >&2
+  echo "(targets: $target_lines, markers: '${marker_alternation}')." >&2
+  echo 'Refusing to continue rather than report an unverified 0.' >&2
+  exit 2
+fi
+
 # Whole-word matching so "TBD", "TBD:", "TBD." and "TBD," all count. This pattern runs under
 # grep -E, where \b is honoured. It is never handed to awk -- see the scan loop for why.
 marker_pattern="\\b(${marker_alternation})\\b"
@@ -89,6 +132,7 @@ bracket_pattern='\[[A-Za-z][^]]{4,}\]([^(]|$)'
 
 total=0
 blocking=0
+targets_scanned=0
 
 echo 'Blueprint adoption readiness'
 echo '============================'
@@ -97,6 +141,7 @@ echo ''
 while IFS=$'\t' read -r path weight note; do
   [ "$path" = "MARKERS" ] && continue
   [ -z "$path" ] && continue
+  targets_scanned=$((targets_scanned + 1))
   dir="$REPO_ROOT/$path"
 
   # A missing target is not "ready" -- it is the most unfilled a project can be. Treating it as
@@ -166,6 +211,16 @@ while IFS=$'\t' read -r path weight note; do
 done <<< "$manifest_lines"
 
 echo ''
+
+# Last guard before the one output an agent acts on. "0 blocking" is only a fact if the manifest
+# was genuinely read AND targets were genuinely scanned; otherwise it is the absence of evidence,
+# which must never be reported as evidence of absence.
+if [ "$MANIFEST_READ_OK" -ne 1 ] || [ "$targets_scanned" -eq 0 ]; then
+  echo 'check-placeholders.sh: refusing to report a marker count -- the manifest was not read' >&2
+  echo "successfully or no target was scanned (read_ok=$MANIFEST_READ_OK, scanned=$targets_scanned)." >&2
+  exit 2
+fi
+
 printf 'Total unfilled markers: %s   (blocking: %s)\n' "$total" "$blocking"
 
 if [ "$total" -eq 0 ]; then

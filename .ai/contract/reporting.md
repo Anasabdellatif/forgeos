@@ -34,31 +34,45 @@ gating, so a pre-v1.12 adoption without a ledger is told, not failed.
 
 ## 1. Final Report Format
 
-Use this structure at the end of every completed or interrupted task.
+Use this structure at the end of every completed or interrupted task. Reporting is tiered by change size and risk:
 
-### Summary
+### Tier 1 — Lightweight Reports (Minor Tasks)
+Applies **only** when all of the following hold:
+- Fewer than 15 total lines modified or added in `git diff --stat`.
+- Zero modifications to governance, rules, contracts, architecture, or database schemas.
+- No new open questions, incidents, or breaking decisions created.
+
+Use this 3-section format:
+- **Summary**: What changed and why in one or two precise sentences.
+- **Validation**: Exact command executed and observed result (e.g. `check-all` exit 0).
+- **State**: What was persisted where, per §0 — or `unchanged`, with reason. Proves the gate.
+
+### Tier 2 — Substantive Reports (Standard & Major Tasks)
+Applies to all tasks not qualifying for Tier 1. Use the full 8-section structure:
+
+#### Summary
 The outcome in a few precise sentences. What changed, and what is now true that was not before.
 
-### Files Changed
+#### Files Changed
 Each changed file and the purpose of its change. Group trivial changes; never omit a file.
 
-### Validation
+#### Validation
 The exact commands executed and their observed results. Every skipped check with its reason and
 residual risk. See `.ai/contract/validation.md` §7.
 
-### Acceptance Criteria
+#### Acceptance Criteria
 Each criterion individually, marked `passed`, `failed`, `blocked`, or `n/a`, with its evidence.
 
-### Risks and Limitations
+#### Risks and Limitations
 Remaining risks, skipped checks, assumptions made, compatibility concerns, known gaps.
 
-### Decisions
+#### Decisions
 Decisions made during the work, and decisions still requiring user input.
 
-### Next Action
+#### Next Action
 The single most useful next action, or `None` when the work is fully complete.
 
-### State
+#### State
 What was persisted where, per §0 — or `unchanged`, with the reason. This section proves the gate;
 a report without it is not final.
 

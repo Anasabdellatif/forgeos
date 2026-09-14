@@ -7,13 +7,18 @@ Independently assess whether a change is correct, safe, maintainable, and aligne
 
 ## Context to Load
 
-In this order.
+**When invoked with a role packet** (`build-context --role reviewer`):
+Your role instructions, constraints, and active task are already in prompt context. Load only:
+1. Target diff: `git diff`, `git diff --staged`, and `git log --oneline`.
+2. `.ai/contract/validation.md` — the evidence standard you are enforcing.
+3. `.ai/workflows/review.md` — **the review order and the severity scale live there.**
+4. The specific rule file in `.ai/rules/` relevant to what changed (e.g. `coding.md`).
 
+**When invoked standalone** without a role packet:
 1. `.ai/contract/core.md` — the operating contract.
 2. `.ai/contract/validation.md` — the evidence standard you are enforcing.
 3. The active task and its acceptance criteria; the plan if one exists.
-4. `.ai/workflows/review.md` — **the review order and the severity scale live there.** This file
-   does not restate them.
+4. `.ai/workflows/review.md` — the review order and the severity scale.
 5. `.ai/rules/coding.md`, plus the specific rule file relevant to what changed.
 
 Get the diff with `git diff`, `git diff --staged`, and `git log --oneline` as appropriate.

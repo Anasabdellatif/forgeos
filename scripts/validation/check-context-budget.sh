@@ -121,6 +121,23 @@ printf '  %-38s %6d chars  ~%5d tokens\n' 'always-loaded total' "$total_chars" "
 printf '  budget: target %s tokens, warn %s (chars/token: %s)\n' "$TARGET" "$WARN" "$CHARS_PER_TOKEN"
 printf '  project allowance: ~%s tokens to target, ~%s to warn (target minus the platform floor)\n' "$allow_target" "$allow_warn"
 
+desc_chars=0
+desc_count=0
+for df in "$REPO_ROOT"/.claude/agents/*.md "$REPO_ROOT"/.claude/skills/*/SKILL.md; do
+  [ -f "$df" ] || continue
+  [ "$(basename "$df")" = "README.md" ] && continue
+  fm="$(awk '/^---/{p++;next} p==1{print} p>=2{exit}' "$df")"
+  if [ -n "$fm" ]; then
+    chars="$(printf '%s\n' "$fm" | wc -c | tr -d ' ')"
+    desc_chars=$((desc_chars + chars))
+    desc_count=$((desc_count + 1))
+  fi
+done
+if [ "$desc_chars" -gt 0 ]; then
+  desc_tk=$((desc_chars / CHARS_PER_TOKEN))
+  printf '  platform descriptors (%d agents/skills): %6d chars  ~%5d tokens\n' "$desc_count" "$desc_chars" "$desc_tk"
+fi
+
 if [ "$missing" -gt 0 ]; then
   echo "Context budget check FAILED  ($missing budgeted file(s) missing -- seed or sync the project first)"
   exit 1

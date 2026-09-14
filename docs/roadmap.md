@@ -33,7 +33,7 @@ capability tracks below are still tracked against their declared criteria:
 | Track | Today | Phase that raises it |
 | --- | --- | --- |
 | Installability | ~85% | M-21, M-22 — installers Proven; package managers deferred with blockers named |
-| Project Command Center | **100%** | M-20 — complete |
+| Project Command Center | **~100%** | M-20 — complete, 16 of 16 declared criteria met |
 | Driving a real project end to end | ~60% | M-23 |
 
 The percentages above are the **live** figures, updated as criteria are met; the decision record that set the bar defines the method and is dated history, not a tracker.
@@ -170,6 +170,22 @@ fails if it breaks) · *Working* (done by hand, written down) · *Declared* (con
 installer.** Everything else ships as *deferred with its blocker named*, because a channel silently
 missing reads as an oversight while a channel named as deferred reads as a decision.
 
+Declared criteria — the list the paragraph above fixes, in the table shape the command centre reads.
+Each row restates a rung already earned in the channel table; the ladder, not this table, is the
+evidence:
+
+| # | Criterion | Met when | Status |
+| --- | --- | --- | --- |
+| 1 | Release artifact channel | Download, verify checksum, extract, sync — a job fails if it breaks | **done** — Proven |
+| 2 | Source clone channel | Clone, discard history, init | **done** — Proven |
+| 3 | Local `forgeos` command | Wraps the engine in both shells | **done** — Proven, M-21 |
+| 4 | One checksum-verifying installer per claimed platform | Downloaded, read, then run; fails closed on a mismatch; exercised by the install matrix | **done** — PowerShell and POSIX (Linux) Proven |
+| 5 | Every other channel deferred with its blocker named, declared, or refused | No channel is silently missing from the table above | **done** |
+| 6 | Safety criteria pinned by tests | The seven criteria below each carry a case | **done** |
+
+macOS stays outside this list on purpose: the POSIX installer claims Linux, and a criterion for a
+platform no job runs would be a criterion nothing can fail.
+
 **Both installers exist and are Proven.** `scripts/install/install-forgeos.ps1` writes two shims on
 Windows; `scripts/install/install-forgeos.sh` writes one executable launcher on Linux. Same contract
 either way: they fetch nothing, never change PATH — the line is printed for you to add — verify a
@@ -224,8 +240,8 @@ Declared criteria:
 | 5 | Data model documented in `docs/domains/` | The documented model matches the schema | not built |
 | 6 | Work delivered as small implementation slices, each with acceptance criteria | Three slices closed with criteria checked individually | not built |
 | 7 | Completion recorded per slice, with evidence, in the task record | The closure gate passes on real records | not built |
-| 8 | **No context loss between sessions** — a new session resumes from files alone | A cold session continues correctly without recollection | not built |
-| 9 | The next prompt generated from repository state, not composed by hand | `forgeos prompt` produces the session package that starts a real slice | partial |
+| 8 | **No context loss between sessions** — a new session resumes from files alone | A cold session continues correctly without recollection | partial — three consecutive cold sessions on one adopted project each resumed from `forgeos brief` and the repository files alone, selected one unblocked slice, and closed it with local validation; a second adopted project has not yet done the same |
+| 9 | The next prompt generated from repository state, not composed by hand | `forgeos prompt` produces the session package that starts a real slice | done — the brief form (`forgeos prompt --brief`) started three real slices on one adopted project; the full `prompt` form was not used in the field |
 | 10 | The full loop `/start-task → /implement → /review → /finish-task` run end to end on a real slice | Every stage leaves its record | not built |
 | 11 | The three never-dispatched roles exercised: `product-analyst`, `data-reviewer`, `release-manager` | Each produces its artifact on a real slice | not built |
 
@@ -233,6 +249,25 @@ Declared criteria:
 implemented, reviewed and closed through the loop, in separate sessions, with every session
 resuming from the repository rather than from recollection — and the defects that surfaced are
 closed and pinned by permanent cases, as every previous field finding has been.
+
+**Field evidence so far (2026-09-11).** One adopted project ran three consecutive cold-session trials of
+`forgeos brief`, each with the verdict `BRIEF_TRIAL_SUCCESS`. Every session was cold,
+started from `forgeos brief` and never from `forgeos prompt`, resumed from repository files alone,
+selected and completed one small unblocked slice, validated locally, and committed locally only; no
+push, deploy, tag, or visibility change happened. What that proves is cold-session resume on one real
+adopted project — not broad adoption, and not this phase's definition of done. Measured on that
+project: the brief is ~650 tokens, about 1.5x smaller than the `prompt` paste block it replaced;
+the whole-session token comparison remains unmeasured (open question 006), and one later large
+implementation session on a second adopted project (2026-09-12) reached its usage limit despite
+starting from a brief within budget — the launcher cut does not bound the session, so `economy.md`
+§4 now states a large-session protocol, itself unmeasured. The one repeated
+friction: when the roadmap's next capability was blocked by an owner-side decision — visibility,
+DNS, hosting, secrets, push or deploy authorization — the brief named the capability and not the
+blocker, and each session spent 6–9 targeted reads finding out. The brief now prints the blocker
+and either names a task record already waiting in `.ai/tasks/inbox/` or says that no safe unblocked
+alternative was found; it still invents nothing. What remains for this phase: a second adopted
+project resuming the same way, the three never-dispatched roles, and the slices that the owner-side
+blockers on that project currently prevent.
 
 ## M-24 — Public launch hardening
 
@@ -266,8 +301,12 @@ Each of these was considered and declined; the reasoning is recorded in the proj
 
 - **macOS.** The POSIX half is expected to run there and has never been tested on it. CI runs
   Windows and Ubuntu.
-- **The full work loop.** Parts of the task lifecycle have never been exercised end to end on a
-  real task.
+- **The full work loop on a second project.** It has run end to end on this repository's own
+  slices, and three cold sessions on one adopted project started from the generated brief and each
+  closed a slice; no second adopted project has done the same, and three roles are still undispatched.
+- **Whole-session token economy.** Only the session launcher is measured: the brief is 4.3x smaller
+  than the full package here and about 1.5x smaller on the one adopted project that measured it.
+  Nothing says what a whole managed session costs against an unmanaged one.
 - **Scale.** This has been proven on real projects, not on many projects at once.
 
 That list is kept current on purpose. A roadmap that only lists strengths is marketing.

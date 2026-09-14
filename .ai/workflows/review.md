@@ -25,19 +25,29 @@ Classify findings as:
 
 ## Independence
 
-**The agent that wrote the change must not be its only approver.** Where the tool supports separate
-contexts, delegate the review to a fresh one:
+**The agent that wrote the change must not be its only approver.** The review is required; a
+separate context for it is not automatic. `core.md` §3 rule 9 forbids spawning subagents or review
+swarms unless the user explicitly authorized them in the current conversation, and that rule wins.
 
-| Lens | Runs when |
+| Lens | Required when |
 | --- | --- |
-| `reviewer` | Always — correctness, scope, regressions, evidence |
+| `reviewer` | Every change — correctness, scope, regressions, evidence |
 | `security-reviewer` | Auth, tenancy, input, secrets, execution, integrations, infrastructure |
 | `data-reviewer` | Schema, migration, backfill, retention, hot-path query |
 
-They are independent and can run in parallel. The specialized lenses run **alongside** `reviewer`,
-never instead of it.
+The specialized lenses run **alongside** `reviewer`, never instead of it. How they run depends on
+what was authorized:
 
-Self-review catches typos. It structurally cannot catch the assumption the author never questioned.
+- **Separate reviewers authorized** (a fresh session, a person, or a subagent the user named): each
+  lens gets a role packet — `powershell -File scripts/ai/build-context.ps1 -Role <name>` or
+  `bash scripts/ai/build-context.sh --role <name>` — never the repository. The packet carries the
+  role's boundaries, constraints, and task at about a quarter of the full context, as measured.
+- **Not authorized, or unavailable:** the author performs a **bounded self-review** — the review
+  order above, against the final diff, written into the task under `Role evidence:` for each lens
+  the scope tags demand — and records the gap explicitly: `independent review: not run; self-review
+  only` under `Validation` and in the final report's Risks and Limitations. The gap is a finding,
+  not a formality; a self-review catches typos and structurally cannot catch the assumption the
+  author never questioned. It never justifies launching a swarm to close it.
 
 ## Rules
 

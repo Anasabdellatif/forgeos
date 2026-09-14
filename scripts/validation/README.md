@@ -18,7 +18,7 @@ it in. Available as `.ps1` and `.sh` with identical behavior.
 | `check-public-surface` | The blueprint's own public launch page against what the tools report — the stated version, the check-row counts, the proof sections, every numeric claim the tools measure -- self-test cases, policy controls, link counts -- handed to it by `check-all` through `--measured`, whether every public trust file is DECLARED source-only rather than staying home by accident, and whether any could reach an adopting project. Audits the source repository only; an adopted project is reported as not applicable | **yes** — `check-all` runs it with `--fail-on-drift` |
 | `check-selftest-parity` | The two hook self-tests ran the same cases, in the same order. CI only; it compares their published output | yes, in CI |
 
-`scripts/hooks/selftest` is also run by `check-all` as a gating check: **210 cases** covering
+`scripts/hooks/selftest` is also run by `check-all` as a gating check: **214 cases** covering
 `guard-bash`, `scan-secrets`, `guard-discovery`, `guard-governance`, the discovery gate on `new-task`, the closure
 record written by `finish-task`, profile role evidence, the public-surface audit, and the adoption and context tooling --
 `sync-blueprint` and `build-context` -- identical in both shells.
@@ -191,12 +191,13 @@ word markers, not the bracketed prompts: `.ai/context/` is written entirely in t
 markers alone answer the question, and duplicating the bracket regex would create a second home for
 the trickiest pattern in the repository.
 
-**It fails open when the manifest cannot be read**, and that is deliberate. `_json.sh` states the
-principle: a hook is a safety net, not a security boundary. A hook that blocks every write on a
-machine with no JSON parser is a hook that gets switched off, and a disabled hook enforces nothing.
-The fail-**closed** half of this control is `check-placeholders --fail-on-blocking`, which since
-v1.7.2 refuses to report a clean result it did not compute. Hook for the moment of the mistake,
-validation for the gate that cannot be talked around.
+**It fails closed when the manifest is missing, unreadable, or incomplete** — exit 2, naming the
+file, identically in both shells. Until M-23a the hook allowed the write in that state, on the
+reasoning that a hook is a safety net rather than a security boundary; but a gate that cannot read
+its own rules cannot confirm the project is defined, and allowing was the one direction the checker
+it defers to already refuses: `check-placeholders --fail-on-blocking` has failed closed on an
+unreadable manifest since v1.7.2. A malformed *payload* still fails open (`scripts/hooks/README.md`):
+that is a harness parsing fault, not a missing rule, and the two are kept distinct on purpose.
 
 `--fail-on-blocking` / `-FailOnBlocking` already existed; v1.8.0 added no new option.
 

@@ -24,11 +24,12 @@
 .NOTES
     Exit 2 blocks the write. Exit 0 allows it.
 
-    Fails OPEN when the manifest cannot be read. That is deliberate and consistent with
-    scripts/hooks/_json.sh: a hook is a safety net, not a security boundary, and a hook that
-    blocks every write on a machine with no JSON parser is a hook that gets switched off. The
-    fail-CLOSED half of this control is check-placeholders -FailOnBlocking, which since 1.7.2
-    refuses to report a clean result it did not compute.
+    Fails CLOSED when the manifest is missing, unreadable, or incomplete: exit 2, naming the
+    file. A gate that cannot read its own rules cannot confirm the project is defined, and
+    allowing the write in that state was the one direction the checker it defers to already
+    refuses -- check-placeholders -FailOnBlocking has failed closed on an unreadable manifest
+    since 1.7.2. A malformed PAYLOAD still fails open (scripts/hooks/README.md): that is a
+    harness parsing fault, not a missing rule, and the two are kept distinct on purpose.
 
     Honors CLAUDE_PROJECT_DIR so the self-test can point it at a throwaway project.
     Compatible with Windows PowerShell 5.1 and PowerShell 7+.
@@ -67,8 +68,18 @@ try {
     $blockingTargets = @($manifest.placeholderScan.targets | Where-Object { $_.weight -eq 'blocking' } | ForEach-Object { $_.path })
     if (-not $gate -or $markers.Count -eq 0 -or $blockingTargets.Count -eq 0) { throw 'incomplete manifest' }
 } catch {
-    [Console]::Error.WriteLine('guard-discovery: manifest unreadable, allowing the write. Run check-placeholders -FailOnBlocking to check the gate properly.')
-    exit 0
+    [Console]::Error.WriteLine(@"
+BLOCKED by the discovery gate (scripts/hooks/guard-discovery.ps1).
+
+File    : $filePath
+Reason  : the gate cannot confirm this project is defined. Its manifest is missing, unreadable,
+          or incomplete: $manifestPath
+
+This refuses rather than allows: a gate that cannot read its own rules is not a gate. Restore the
+file from the blueprint, or run a sync, then try again. To see the verdict directly:
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validation\check-placeholders.ps1 -FailOnBlocking
+"@)
+    exit 2
 }
 
 # Relative path, forward slashes. A file outside the project is not this gate's business.

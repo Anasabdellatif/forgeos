@@ -973,6 +973,53 @@ if [ -d "$fresh_fix/shallow" ]; then
 fi
 assert_code 'freshness: a shallow clone refuses to claim OK' 3 "$ok"
 
+# --- project ingestion reports the layer, and never gates it --------------------------------------
+# M-25 slice 1. Informational by design: a documented project with no maps yet is a finding to
+# report, not a reason to fail validation on a project that adopted before the layer existed. Built
+# on fixtures that carry only the check and their own blueprint.version, so the answer never depends
+# on the host this suite ships into.
+ing_fix="$tmp_root/ingest"
+ing_mk() {   # ing_mk <root> <role>
+  mkdir -p "$1/scripts/validation"
+  cp "$repo_root/scripts/validation/check-project-ingestion.sh" "$1/scripts/validation/"
+  printf '{\n  "role": "%s",\n  "version": "0.0.0"\n}\n' "$2" > "$1/blueprint.version"
+}
+ing_files() {   # ing_files <root> <name>...
+  local root="$1"; shift
+  mkdir -p "$root/.ai/product"
+  for n in "$@"; do printf '# %s\n' "$n" > "$root/.ai/product/$n.md"; done
+}
+
+ing_mk "$ing_fix/withdocs" adopted
+mkdir -p "$ing_fix/withdocs/docs/Client"
+printf 'signed specification\n' > "$ing_fix/withdocs/docs/Client/spec.md"
+ok=0
+ing_out="$(bash "$ing_fix/withdocs/scripts/validation/check-project-ingestion.sh" 2>&1)"; ing_code=$?
+[ "$ing_code" -eq 0 ] && ok=$((ok + 1))
+printf '%s' "$ing_out" | grep -q 'PROJECT_WITH_GOVERNING_DOCS' && ok=$((ok + 1))
+printf '%s' "$ing_out" | grep -qE 'intelligence +0 of 7' && ok=$((ok + 1))
+printf '%s' "$ing_out" | grep -q 'Project ingestion NOTE' && ok=$((ok + 1))
+ing_files "$ing_fix/withdocs" authority-map source-index project-concept module-map \
+  requirement-matrix implementation-roadmap open-decisions
+ing_out="$(bash "$ing_fix/withdocs/scripts/validation/check-project-ingestion.sh" 2>&1)"; ing_code=$?
+[ "$ing_code" -eq 0 ] && printf '%s' "$ing_out" | grep -q 'Project ingestion OK' && ok=$((ok + 1))
+# The source blueprint has no product of its own to ingest, and says so instead of nagging.
+ing_mk "$ing_fix/source" source
+ing_out="$(bash "$ing_fix/source/scripts/validation/check-project-ingestion.sh" 2>&1)"; ing_code=$?
+[ "$ing_code" -eq 0 ] && printf '%s' "$ing_out" | grep -q 'NOT_APPLICABLE' && ok=$((ok + 1))
+assert_code 'ingestion: governing docs are detected and the map layer is reported, never gated' 6 "$ok"
+
+ing_mk "$ing_fix/bare" adopted
+ok=0
+ing_out="$(bash "$ing_fix/bare/scripts/validation/check-project-ingestion.sh" 2>&1)"; ing_code=$?
+[ "$ing_code" -eq 0 ] && ok=$((ok + 1))
+printf '%s' "$ing_out" | grep -q 'PROJECT_DISCOVERY_REQUIRED' && ok=$((ok + 1))
+printf '%s' "$ing_out" | grep -qE 'discovery +0 of 6' && ok=$((ok + 1))
+ing_files "$ing_fix/bare" project-brief stakeholders module-map-draft questions assumptions phase-roadmap
+ing_out="$(bash "$ing_fix/bare/scripts/validation/check-project-ingestion.sh" 2>&1)"; ing_code=$?
+[ "$ing_code" -eq 0 ] && printf '%s' "$ing_out" | grep -q 'Project ingestion OK' && ok=$((ok + 1))
+assert_code 'ingestion: a project with no governing docs is pointed at discovery outputs' 4 "$ok"
+
 # --- the public surface audits claims, and audits only ours ------------------------------------
 # A check that reports the front page must not be able to fail the branch while the front page is
 # still being written, and must not audit an adopted project against ForgeOS's launch contract.

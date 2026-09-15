@@ -15,10 +15,11 @@ it in. Available as `.ps1` and `.sh` with identical behavior.
 | `check-placeholders` | Remaining `TBD` markers, weighted by adoption impact | informational by default |
 | `check-context-budget` | The always-loaded context against `policy.contextBudget` in the manifest — split into the platform floor and the project's own files, so an overrun names its owner | informational; `--fail-on-over` opts in |
 | `check-state-freshness` | How far the state ledger lags HEAD — the persistence gate's advisory meter (`reporting.md` §0). Never fails, and never guesses: no ledger, or a history too shallow to measure, is reported rather than passed | informational, always |
+| `check-project-ingestion` | Whether the project has turned its governing documents into compact, cited product-intelligence maps — or, with none, prepared its discovery records — per `.ai/workflows/ingest-project.md`. Presence only: it never opens a document. Never fails; reports `N/A` in the source blueprint | informational, always |
 | `check-public-surface` | The blueprint's own public launch page against what the tools report — the stated version, the check-row counts, the proof sections, every numeric claim the tools measure -- self-test cases, policy controls, link counts -- handed to it by `check-all` through `--measured`, whether every public trust file is DECLARED source-only rather than staying home by accident, and whether any could reach an adopting project. Audits the source repository only; an adopted project is reported as not applicable | **yes** — `check-all` runs it with `--fail-on-drift` |
 | `check-selftest-parity` | The two hook self-tests ran the same cases, in the same order. CI only; it compares their published output | yes, in CI |
 
-`scripts/hooks/selftest` is also run by `check-all` as a gating check: **214 cases** covering
+`scripts/hooks/selftest` is also run by `check-all` as a gating check: **216 cases** covering
 `guard-bash`, `scan-secrets`, `guard-discovery`, `guard-governance`, the discovery gate on `new-task`, the closure
 record written by `finish-task`, profile role evidence, the public-surface audit, and the adoption and context tooling --
 `sync-blueprint` and `build-context` -- identical in both shells.
@@ -70,6 +71,14 @@ under a truncated history it returns HEAD for any ledger — which is how CI rep
 "updated by the latest commit" on every push while running at `fetch-depth: 1` (fixed in
 v1.15.1: the checker says what it cannot measure, and the jobs that run `check-all` fetch
 full history so the answer stays useful).
+
+Two cover `check-project-ingestion`, each on a throwaway project that carries only the check and
+its own `blueprint.version`, so the answer never depends on the host. A project with a
+`docs/Client/` directory and no maps reports `PROJECT_WITH_GOVERNING_DOCS` with 0 of 7 maps as a
+NOTE and exit 0, then OK once the seven exist, and a `source`-role copy reports `NOT_APPLICABLE`.
+A project with no governing directory reports `PROJECT_DISCOVERY_REQUIRED` with 0 of 6 records,
+then OK once the six exist. The check reads names only and never opens a document, which is the
+whole token argument of the layer it reports on.
 
 Three pin `../../` normalisation in `check-links`, on both shells. POSIX collapsed
 `docs/architecture/../../x` to `docs/x` — `${out%/*}` cannot strip a segment with no slash
@@ -440,12 +449,14 @@ of findings.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validation/check-all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validation/check-all.ps1 -Strict
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validation/check-placeholders.ps1 -Detailed
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validation/check-project-ingestion.ps1
 ```
 
 ```bash
 bash scripts/validation/check-all.sh
 bash scripts/validation/check-all.sh --strict
 bash scripts/validation/check-placeholders.sh --detailed
+bash scripts/validation/check-project-ingestion.sh
 ```
 
 `--strict` / `-Strict` also fails on blocking placeholders. Use it in CI **once the project is

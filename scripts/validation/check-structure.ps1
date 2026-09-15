@@ -117,6 +117,7 @@ foreach ($scanRoot in $scanRoots) {
     if (-not (Test-Path -LiteralPath $full -PathType Container)) { continue }
     Get-ChildItem -LiteralPath $full -Recurse -File -Include '*.md', '*.ps1', '*.sh', '*.json' |
         Where-Object { $_.FullName -notmatch '[\\/](tasks|plans)[\\/](inbox|active|completed|abandoned)[\\/]' } |
+        Where-Object { $_.FullName -notmatch '[\\/]\.ai[\\/]product[\\/]' } |
         Where-Object { $_.FullName -notmatch '[\\/]memory[\\/](decisions|lessons|incidents|handoffs)[\\/](?!README\.md)' } |
         ForEach-Object {
             $rel = $_.FullName.Substring($repoRoot.Length + 1).Replace('\', '/')

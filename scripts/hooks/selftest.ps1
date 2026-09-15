@@ -1080,6 +1080,64 @@ try {
     }
     Assert-ExitCode -Case 'freshness: a shallow clone refuses to claim OK' -Expected 3 -Actual $freshOk
 
+    # --- project ingestion reports the layer, and never gates it ------------------------------
+    # M-25 slice 1. Informational by design: a documented project with no maps yet is a finding
+    # to report, not a reason to fail validation on a project that adopted before the layer
+    # existed. Built on fixtures that carry only the check and their own blueprint.version, so the
+    # answer never depends on the host this suite ships into.
+    $ingFix = Join-Path $toolRoot 'ingest'
+    function New-IngestFixture {
+        param([string]$Root, [string]$Role)
+        New-Item -ItemType Directory -Path (Join-Path $Root 'scripts\validation') -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\validation\check-project-ingestion.ps1') `
+            -Destination (Join-Path $Root 'scripts\validation\check-project-ingestion.ps1') -Force
+        [System.IO.File]::WriteAllText((Join-Path $Root 'blueprint.version'),
+            ("{`n  `"role`": `"" + $Role + "`",`n  `"version`": `"0.0.0`"`n}`n"))
+    }
+    function Set-IngestFiles {
+        param([string]$Root, [string[]]$Names)
+        $dir = Join-Path $Root '.ai\product'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        foreach ($n in $Names) { [System.IO.File]::WriteAllText((Join-Path $dir "$n.md"), "# $n`n") }
+    }
+
+    $ingDocs = Join-Path $ingFix 'withdocs'
+    New-IngestFixture -Root $ingDocs -Role 'adopted'
+    New-Item -ItemType Directory -Path (Join-Path $ingDocs 'docs\Client') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $ingDocs 'docs\Client\spec.md'), "signed specification`n")
+    $ingDocsScript = Join-Path $ingDocs 'scripts\validation\check-project-ingestion.ps1'
+    $ingOk = 0
+    $ingOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ingDocsScript 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { $ingOk++ }
+    if ($ingOut -cmatch 'PROJECT_WITH_GOVERNING_DOCS') { $ingOk++ }
+    if ($ingOut -cmatch 'intelligence +0 of 7') { $ingOk++ }
+    if ($ingOut -cmatch 'Project ingestion NOTE') { $ingOk++ }
+    Set-IngestFiles -Root $ingDocs -Names @('authority-map', 'source-index', 'project-concept', 'module-map',
+        'requirement-matrix', 'implementation-roadmap', 'open-decisions')
+    $ingOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ingDocsScript 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $ingOut -cmatch 'Project ingestion OK') { $ingOk++ }
+    # The source blueprint has no product of its own to ingest, and says so instead of nagging.
+    $ingSource = Join-Path $ingFix 'source'
+    New-IngestFixture -Root $ingSource -Role 'source'
+    $ingOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $ingSource 'scripts\validation\check-project-ingestion.ps1') 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $ingOut -cmatch 'NOT_APPLICABLE') { $ingOk++ }
+    Assert-ExitCode -Case 'ingestion: governing docs are detected and the map layer is reported, never gated' -Expected 6 -Actual $ingOk
+
+    $ingBare = Join-Path $ingFix 'bare'
+    New-IngestFixture -Root $ingBare -Role 'adopted'
+    $ingBareScript = Join-Path $ingBare 'scripts\validation\check-project-ingestion.ps1'
+    $ingOk = 0
+    $ingOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ingBareScript 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { $ingOk++ }
+    if ($ingOut -cmatch 'PROJECT_DISCOVERY_REQUIRED') { $ingOk++ }
+    if ($ingOut -cmatch 'discovery +0 of 6') { $ingOk++ }
+    Set-IngestFiles -Root $ingBare -Names @('project-brief', 'stakeholders', 'module-map-draft', 'questions',
+        'assumptions', 'phase-roadmap')
+    $ingOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ingBareScript 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $ingOut -cmatch 'Project ingestion OK') { $ingOk++ }
+    Assert-ExitCode -Case 'ingestion: a project with no governing docs is pointed at discovery outputs' -Expected 4 -Actual $ingOk
+
     # --- the public surface audits claims, and audits only ours ---------------------------
     # A check that reports the front page must not be able to fail the branch while the front
     # page is still being written, and must not audit an adopted project against ForgeOS's

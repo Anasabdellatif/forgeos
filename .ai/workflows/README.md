@@ -12,6 +12,7 @@ Repeatable procedures for moving work safely from request to completion.
 | `review.md` | Inspect correctness, risk, and scope | `/review` |
 | `finish-task.md` | Validate and close completed work | `/finish-task` |
 | `handoff.md` | Preserve continuation context | `/handoff` |
+| `ingest-project.md` | Turn governing documents into compact cited maps — or, with none, prepare discovery records | none yet — slice 2 |
 
 ## This directory is the single source of truth
 

@@ -4,17 +4,17 @@
 
 ## Position
 
-- Now: idle — v1.17.0. Large-session economy protocol (`economy.md` §4), the `forgeos brief`
-  launcher that names its blocker, tiered reporting, reviewer role packets, and a provider-neutral
-  session policy. 214 cases per shell, 11 validation rows green.
+- Now: idle — v1.18.0. Project Ingestion Layer slice 1: `.ai/workflows/ingest-project.md`, thirteen
+  templates in `templates/project-intelligence/`, an informational ingestion row in `check-all`.
+  216 cases per shell, 12 validation rows green; slices 2 and 3 in `docs/roadmap.md`.
 - Next: M-23 row 8 — a second adopted project resuming from `forgeos brief` and files alone.
 - Blocked by: none
 - Watch: Q-002 (macOS CI) and Q-003 (npm name) gate two channels; Q-006 protocol unmeasured.
 
 ## Last known good
 
-- Commit: the v1.17.0 release commit — this history begins at the public launch.
-- Validation: check-all 11 rows green; selftest 214/214 both shells; release self-test 14/14.
+- Commit: the v1.18.0 release commit — this history begins at the public launch.
+- Validation: check-all 12 rows green; selftest 216/216 both shells; release self-test 14/14.
 
 ## Gates
 

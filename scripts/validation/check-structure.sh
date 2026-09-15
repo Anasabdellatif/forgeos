@@ -131,6 +131,8 @@ for scan_root in .ai .claude scripts templates examples; do
     case "$rel" in
       */tasks/inbox/*|*/tasks/active/*|*/tasks/completed/*|*/tasks/abandoned/*) continue ;;
       */plans/inbox/*|*/plans/active/*|*/plans/completed/*|*/plans/abandoned/*) continue ;;
+        # A project's own ingestion maps (M-25): project-owned, never declared by the blueprint.
+        .ai/product/*) continue ;;
     esac
     case "$rel" in
       */memory/decisions/*|*/memory/lessons/*|*/memory/incidents/*|*/memory/handoffs/*)

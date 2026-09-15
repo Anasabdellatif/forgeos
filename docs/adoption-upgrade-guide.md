@@ -118,7 +118,7 @@ bash scripts/validation/check-all.sh
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validation/check-all.ps1
 ```
 
-Eight gating checks decide the exit code; three informational reports never do. What to do when one
+Eight gating checks decide the exit code; four informational reports never do. What to do when one
 speaks up:
 
 | Report | Means | Response |
@@ -131,6 +131,7 @@ speaks up:
 | `PROJECT OVER` / `PROJECT WARN` | Your always-loaded files exceed the budget | Trim `.ai/context/` — the ledger and the context summaries are yours to shorten |
 | `PLATFORM OVER` | The blueprint's own floor exceeds the budget | Not yours to fix. Report it upstream |
 | `State freshness NOTE` | The ledger has not been touched in N commits | Either refresh it, or say in your report why the state is unchanged. Under a shallow clone it declines to measure at all |
+| `Project ingestion NOTE` | Governing documents exist but their compact maps do not — or, with none, the discovery records are missing | Run `.ai/workflows/ingest-project.md` before implementation. Informational only; never fails |
 | `UNFILLED [blocking]` placeholders | `.ai/context/` or `docs/product/` still carry `TBD` | Adoption is unfinished. Fill from evidence — this is informational by default and only fails with `--strict` |
 | `Public surface NOT APPLICABLE` | You are an adopted project | Correct and expected. That audit belongs to ForgeOS, not to you |
 

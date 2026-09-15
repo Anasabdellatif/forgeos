@@ -280,6 +280,25 @@ after it, not instead of it:
 - Confirm the three tracks' percentages from their declared criteria lists, naming any outstanding
   criterion.
 
+## M-25 — Project Ingestion Layer
+
+ForgeOS governs how agents work; it did not yet say how a project's own documents become something an
+agent can use cheaply. Where a project already carries governing documents — a client specification,
+developer documents, a data model — an agent must not ask the owner for values those documents
+already state, and must not re-read whole specifications every session to find them. This phase turns
+governing documents into compact, cited maps under `.ai/product/`, read first; a project with no
+governing documents prepares discovery records there instead, before implementation.
+
+Two modes, decided by what the repository holds: **with governing documents** (seven product
+intelligence maps) and **discovery required** (six discovery records). The procedure is
+`.ai/workflows/ingest-project.md`; the templates are in `templates/project-intelligence/`.
+
+| # | Criterion | Met when | Status |
+| --- | --- | --- | --- |
+| 1 | Slice 1 — workflow, templates, and an informational check | The workflow and thirteen templates ship, and the ingestion check reports the mode and map coverage on both shells without gating | done — 2026-09-14, selftest 216 of 216 on both shells |
+| 2 | Slice 2 — command automation | `forgeos ingest`, or `status` and `brief`, surface ingestion state, and a slash command routes to the workflow; requires #1 | not built |
+| 3 | Slice 3 — gating, once proven on adopters | The check can fail validation for a documented project with no maps, after at least one adopter built its maps through the workflow; requires #2 | not built |
+
 ## Not being built
 
 Each of these was considered and declined; the reasoning is recorded in the project decision log

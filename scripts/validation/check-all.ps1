@@ -104,6 +104,7 @@ if ($Strict) {
 
 Invoke-Check -Name 'context-budget' -Path 'scripts\validation\check-context-budget.ps1'
 Invoke-Check -Name 'state-freshness' -Path 'scripts\validation\check-state-freshness.ps1'
+Invoke-Check -Name 'ingestion'       -Path 'scripts\validation\check-project-ingestion.ps1'
 Invoke-Check -Name 'public-surface'  -Path 'scripts\validation\check-public-surface.ps1' -Arguments @('-FailOnDrift', '-Measured', $runLog) -Gating
 
 Write-Output ''

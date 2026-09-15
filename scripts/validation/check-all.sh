@@ -98,6 +98,7 @@ fi
 
 run_check 'context-budget' 'scripts/validation/check-context-budget.sh' 0
 run_check 'state-freshness' 'scripts/validation/check-state-freshness.sh' 0
+run_check 'ingestion'      'scripts/validation/check-project-ingestion.sh' 0
 run_check 'public-surface' 'scripts/validation/check-public-surface.sh' 1 --fail-on-drift --measured "$RUN_LOG"
 
 echo ''

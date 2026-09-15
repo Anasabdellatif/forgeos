@@ -18,6 +18,11 @@ your first record of a given type.
 | `incident-template.md` | `.ai/memory/incidents/` | — |
 | `project-context-template.md` | `.ai/context/project.md`, **placed by sync** | — |
 | `governance-template.json` | `.ai/context/governance.json`, **placed by sync** | — |
+| `project-intelligence/authority-map.md` to `project-intelligence/open-decisions.md` — seven maps | `.ai/product/`, for a project **with** governing documents | — |
+| `project-intelligence/project-brief.md` to `project-intelligence/phase-roadmap.md` — six records | `.ai/product/`, for a project **without** governing documents | — |
+
+Both project-intelligence sets are copied and filled by `.ai/workflows/ingest-project.md`, which
+names every file in each set.
 
 One template is never copied by hand: `project-context-template.md` is what `sync-blueprint`
 seeds into a new project as `.ai/context/project.md`. This repository fills that path with the

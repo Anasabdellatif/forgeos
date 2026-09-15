@@ -14,7 +14,7 @@ serious codebase already assumes: a durable project memory, write permissions a 
 deliberately, and validation that has to produce evidence before anything may be called done.
 The rules are not advice in a document — where it matters, a machine enforces them.
 
-Current version: **`1.17.0`** · MIT · Windows PowerShell 5.1 and POSIX bash
+Current version: **`1.18.0`** · MIT · Windows PowerShell 5.1 and POSIX bash
 
 **[Quick start](#quick-start)** · **[Commands](#commands)** · **[What is
 enforced](#what-is-enforced)** · **[Roadmap](#roadmap)** · **[useforgeos.com](https://useforgeos.com)**
@@ -29,7 +29,7 @@ them:
 | The agent re-derives the same context every morning, and a decision survives only in a chat log | **Durable project memory** — decisions, lessons, incidents, handoffs, and open questions as files in the repository, plus a one-screen state ledger every session starts from |
 | Rules and memory drift between Claude Code, Codex, and whatever comes next | **One operating contract** — a single authoritative rule set in `.ai/contract/`, read by every tool through thin adapters that are checked for duplication |
 | Implementation outruns approval — code appears that nobody authorized | **Governance windows** — application paths stay closed until a human opens a named, narrow window for one slice of work |
-| "Done" becomes narrative instead of evidence | **Validation gates** — a closure gate refuses unchecked criteria and placeholder evidence; eleven checks run by one command on both platforms and in CI |
+| "Done" becomes narrative instead of evidence | **Validation gates** — a closure gate refuses unchecked criteria and placeholder evidence; twelve checks run by one command on both platforms and in CI |
 | Handoffs between sessions are fragile | **The command center** — `forgeos status` and `forgeos next` read the project's own files and answer *where are we, and what is the next safe thing to do?* |
 
 It is deliberately **not** an app framework, a prompt collection, an autonomous development team,
@@ -71,31 +71,31 @@ refuses that command shape, and it will not be added.
 ### 1. From the release artifact (recommended)
 
 Download both files from the [latest release](https://github.com/Anasabdellatif/forgeos/releases/latest)
-— for `v1.17.0` that is
-[`forgeos-1.17.0.tar.gz`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.17.0/forgeos-1.17.0.tar.gz)
+— for `v1.18.0` that is
+[`forgeos-1.18.0.tar.gz`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.18.0/forgeos-1.18.0.tar.gz)
 and
-[`forgeos-1.17.0.tar.gz.sha256`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.17.0/forgeos-1.17.0.tar.gz.sha256).
+[`forgeos-1.18.0.tar.gz.sha256`](https://github.com/Anasabdellatif/forgeos/releases/download/v1.18.0/forgeos-1.18.0.tar.gz.sha256).
 
 POSIX:
 
 ```bash
-sha256sum -c forgeos-1.17.0.tar.gz.sha256     # verify before you trust it
-tar -xzf forgeos-1.17.0.tar.gz
+sha256sum -c forgeos-1.18.0.tar.gz.sha256     # verify before you trust it
+tar -xzf forgeos-1.18.0.tar.gz
 
 # dry run first — it writes nothing and reports what it would do
-bash forgeos-1.17.0/scripts/blueprint/sync-blueprint.sh --source forgeos-1.17.0 --target <project>
+bash forgeos-1.18.0/scripts/blueprint/sync-blueprint.sh --source forgeos-1.18.0 --target <project>
 # then apply
-bash forgeos-1.17.0/scripts/blueprint/sync-blueprint.sh --source forgeos-1.17.0 --target <project> --apply
+bash forgeos-1.18.0/scripts/blueprint/sync-blueprint.sh --source forgeos-1.18.0 --target <project> --apply
 ```
 
 Windows PowerShell:
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 forgeos-1.17.0.tar.gz).Hash   # compare with the .sha256 file
-tar -xzf forgeos-1.17.0.tar.gz
+(Get-FileHash -Algorithm SHA256 forgeos-1.18.0.tar.gz).Hash   # compare with the .sha256 file
+tar -xzf forgeos-1.18.0.tar.gz
 
-powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.17.0/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.17.0 -Target <project>
-powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.17.0/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.17.0 -Target <project> -Apply
+powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.18.0/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.18.0 -Target <project>
+powershell -NoProfile -ExecutionPolicy Bypass -File forgeos-1.18.0/scripts/blueprint/sync-blueprint.ps1 -Source forgeos-1.18.0 -Target <project> -Apply
 ```
 
 The archive is a **sync source, not a product bundle**: it carries what sync copies plus the
@@ -176,7 +176,7 @@ profiles bind a system's kind to the roles and gates it cannot skip.
 
 Rules that depend only on good intentions get followed until the first deadline. These do not.
 
-**Eight gating checks and three informational reports**, all run by `check-all` on both platforms
+**Eight gating checks and four informational reports**, all run by `check-all` on both platforms
 and in CI:
 
 | Check | Fails when |
@@ -187,20 +187,21 @@ and in CI:
 | `check-links` | Any referenced repository path does not resolve, or a file that lands in an adopting project references one that does not travel with it |
 | `check-blueprint-version` | The version file is missing, unparseable, or the synced set has drifted |
 | `scan-secrets --scan-tree` | Ten secret patterns across every tracked file. Reports file, line, and pattern name — **never the value** |
-| `selftest` | The safety hooks themselves stop blocking what they must block — 214 cases per shell |
+| `selftest` | The safety hooks themselves stop blocking what they must block — 216 cases per shell |
 | `check-public-surface` | **This page** disagrees with what the tools report: a stated version, a check count, a claim the repository contradicts |
 | `check-placeholders` | *Informational:* an adoption-readiness score, weighted by impact |
 | `check-context-budget` | *Informational:* the always-loaded context against its recorded budget, attributed to its owner |
 | `check-state-freshness` | *Informational:* how far the state ledger lags HEAD — and it refuses to answer at all under a shallow clone rather than guess |
+| `check-project-ingestion` | *Informational:* whether a documented project has built its compact product-intelligence maps, or an undocumented one its discovery records — presence only; it never opens a document |
 
 Every number on this page is either checked mechanically or printed by a command you can run:
 
 | Claim | How to verify it yourself |
 | --- | --- |
-| Eleven checks, eight of them gating | `bash scripts/validation/check-all.sh` — the summary names each row and its class |
-| 214 self-test cases, identical on both shells | The same run prints the total; CI's parity job compares the two lists case by case |
+| Twelve checks, eight of them gating | `bash scripts/validation/check-all.sh` — the summary names each row and its class |
+| 216 self-test cases, identical on both shells | The same run prints the total; CI's parity job compares the two lists case by case |
 | 144 policy controls | `bash scripts/validation/check-policy.sh` |
-| Every referenced path resolves | `bash scripts/validation/check-links.sh` — 526 references across 134 files, 0 broken, 0 unportable |
+| Every referenced path resolves | `bash scripts/validation/check-links.sh` — 557 references across 148 files, 0 broken, 0 unportable |
 | This page agrees with the repository | `bash scripts/validation/check-public-surface.sh --fail-on-drift` |
 | Eight CI jobs, green on the pushed commit | `.github/workflows/validate.yml`, and the Actions tab |
 | The release artifact is what it claims | `sha256sum -c` against the published `.sha256`, then `tar -tzf` to read it before extracting |
@@ -248,8 +249,8 @@ repository's own answers or release tooling — and the same tag builds a byte-i
 Windows and on POSIX. Verify before use, always:
 
 ```bash
-sha256sum -c forgeos-1.17.0.tar.gz.sha256
-tar -tzf forgeos-1.17.0.tar.gz | head
+sha256sum -c forgeos-1.18.0.tar.gz.sha256
+tar -tzf forgeos-1.18.0.tar.gz | head
 ```
 
 The changelog lives in `blueprint.version`, one prose entry per version;

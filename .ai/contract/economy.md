@@ -27,6 +27,11 @@ defined project, when preparing a handoff, or when a budget question comes up.
    there directly. Re-deriving what a pointer already states is spend without information.
 7. **The budget is measured, not asserted.** `scripts/validation/check-context-budget` reports the
    always-loaded total against the recorded budget on every `check-all` run.
+8. **Documented projects are read through their maps.** Where `.ai/product/` holds an authority map
+   and a source index, read those compact maps first and open an original document only to verify
+   the one passage a citation names. Never copy a specification into always-loaded context, never
+   re-read a whole document to answer what a map already cites, and never ask the owner for a value
+   before the sources were searched — `.ai/workflows/ingest-project.md`.
 
 ## 2. Delivery targets
 

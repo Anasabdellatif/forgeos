@@ -86,6 +86,7 @@
     ".ai/workflows/review.md",
     ".ai/workflows/finish-task.md",
     ".ai/workflows/handoff.md",
+    ".ai/workflows/ingest-project.md",
 
     ".ai/skills/README.md",
     ".ai/skills/codebase-navigation.md",
@@ -224,6 +225,8 @@
     "scripts/validation/check-context-budget.sh",
     "scripts/validation/check-state-freshness.ps1",
     "scripts/validation/check-state-freshness.sh",
+    "scripts/validation/check-project-ingestion.ps1",
+    "scripts/validation/check-project-ingestion.sh",
     "scripts/validation/check-policy.ps1",
     "scripts/validation/check-policy.sh",
     "scripts/validation/check-public-surface.ps1",
@@ -256,6 +259,19 @@
     "templates/state-ledger-template.md",
     "templates/constraints-template.md",
     "templates/roadmap-template.md",
+    "templates/project-intelligence/authority-map.md",
+    "templates/project-intelligence/source-index.md",
+    "templates/project-intelligence/project-concept.md",
+    "templates/project-intelligence/module-map.md",
+    "templates/project-intelligence/requirement-matrix.md",
+    "templates/project-intelligence/implementation-roadmap.md",
+    "templates/project-intelligence/open-decisions.md",
+    "templates/project-intelligence/project-brief.md",
+    "templates/project-intelligence/stakeholders.md",
+    "templates/project-intelligence/module-map-draft.md",
+    "templates/project-intelligence/questions.md",
+    "templates/project-intelligence/assumptions.md",
+    "templates/project-intelligence/phase-roadmap.md",
 
     ".github/workflows/validate.yml",
     ".github/workflows/release.yml"
@@ -646,7 +662,8 @@
       "^\\.ai/memory/decisions/2026-03",
       "^\\.ai/memory/handoffs/2026-03",
       "settings\\.local\\.json$",
-      "\\.\\.\\."
+      "\\.\\.\\.",
+      "^\\.ai/product/"
     ]
   },
   "placeholderScan": {

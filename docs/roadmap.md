@@ -51,6 +51,9 @@ at most one declared criterion outstanding, and the roadmap must name which one.
   POSIX, so a published checksum is reproducible rather than merely recorded.
 - **Cross-platform consistency.** The discovery gate and the placeholder checker share one detector,
   and both shells report undeclared files.
+- **The install matrix is adopter-safe.** Its two jobs skip where the source-only release builder is
+  absent, so an adopted project no longer inherits two jobs it could never pass. Reported green on
+  one adopted project after its update, by its owner.
 
 Still outstanding from that work: a documented compatibility matrix — which adopted versions can
 upgrade to which.
@@ -199,6 +202,12 @@ fresh project through it, run `check-all` inside that project, and require a cus
 survive an update. That is all five conditions the ladder names, and the full matrix ran green on
 all eight CI jobs.
 
+**In an adopting project the matrix skips instead of failing.** `validate.yml` is portable, but the
+builder those two jobs start from is source-only, so adopted projects inherited two red jobs they
+could never turn green. Each job now records whether its builder is present, right after checkout,
+and every later step runs only when it is; elsewhere the job ends green with a notice. Here the
+matrix runs exactly as before, and the release self-test fails if a step escapes the guard.
+
 The promotion was earned by that run rather than by writing the tests, which is the distinction the
 ladder exists to keep. The matrix earned it the hard way too: it failed three times first, and each
 failure was real — a POSIX builder invoked on a Windows runner producing a three-file artifact, a
@@ -298,6 +307,29 @@ intelligence maps) and **discovery required** (six discovery records). The proce
 | 1 | Slice 1 — workflow, templates, and an informational check | The workflow and thirteen templates ship, and the ingestion check reports the mode and map coverage on both shells without gating | done — 2026-09-14, selftest 216 of 216 on both shells |
 | 2 | Slice 2 — command automation | `forgeos ingest`, or `status` and `brief`, surface ingestion state, and a slash command routes to the workflow; requires #1 | not built |
 | 3 | Slice 3 — gating, once proven on adopters | The check can fail validation for a documented project with no maps, after at least one adopter built its maps through the workflow; requires #2 | not built |
+
+## M-26 — Project Intake, Forecast, and Next Prompt
+
+The ingestion layer detects whether a project has governing documents or needs discovery. The next
+product layer must turn that signal into an owner-friendly forecast and a paste-ready next prompt.
+The direction is recorded in `docs/product/project-intake-and-forecast.md`.
+
+This phase is explicitly for programmers and non-programmers: it should help a project owner with a
+business file bundle, a founder with only an idea, a developer with a codebase, and an AI agent that
+needs the smallest sufficient context. It must not become a hosted service, telemetry layer, or
+automatic authorization engine.
+
+Declared criteria:
+
+| # | Criterion | Met when | Status |
+| --- | --- | --- | --- |
+| 1 | Project mode taxonomy | The command layer distinguishes governing-docs, discovery-required, codebase-reconstruction, website, and enterprise-system modes with confidence and evidence | done — 2026-09-15, `forgeos intake`, from names and sizes only, pinned by self-test fixtures on both shells |
+| 2 | Forecast report | A read-only command reports product, architecture, data, governance, implementation, and token-economy readiness without writing files | done — 2026-09-15, the forecast block of `forgeos intake`, human and JSON |
+| 3 | Next prompt generator | The generated prompt changes by mode and blocker, and names exact read targets, prohibitions, validation, and commit/push policy | not built |
+| 4 | Token-risk routing | The forecast warns when docs, briefs, always-loaded files, or large sessions threaten context budget; no fixed token-saving multiplier is claimed | partial — the intake token-risk line weighs always-loaded bytes, governing documents over 200 KB, and unmapped governing documents; briefs and large sessions are not yet weighed |
+| 5 | Non-programmer path | A project with only an idea receives a discovery prompt and minimum context-file plan instead of implementation instructions | not built |
+| 6 | Governed-docs path | A project with specifications receives a map-building prompt and does not ask the owner for values already in source documents | not built |
+| 7 | Field proof | At least three adopters exercise the report: one website, one governed enterprise project, and one weak-doc/codebase case | not built |
 
 ## Not being built
 

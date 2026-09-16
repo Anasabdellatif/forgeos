@@ -2493,6 +2493,104 @@ grep -q 'scripts/lib/session-policy.json' "$pp2/pkg4.txt" && ok=$((ok + 1))
 [ "$pp2_ref_json" -eq 1 ] && grep -q '"generated": false' "$pp2/pkg5.json" && ok=$((ok + 1))
 assert_code 'prompt package: a reformatted policy table refuses instead of failing open' 4 "$ok"
 
+# --- project intake: classified from names, forecast without writing -------------------------------
+# M-26 slice 1. Fixtures carry only the engine and their own blueprint.version, so the answer never
+# depends on the host. Every run is written to a file outside the fixture first and read from there.
+ik_engine="$repo_root/scripts/command/project-intake.sh"
+ik_forgeos="$repo_root/scripts/command/forgeos.sh"
+ik_root="$tmp_root/intake"
+mkdir -p "$ik_root"
+ik_mk() {   # ik_mk <name> <role>
+  mkdir -p "$ik_root/$1/scripts/command" "$ik_root/$1/.ai/context"
+  cp "$ik_engine" "$ik_root/$1/scripts/command/"
+  printf '{\n  "role": "%s",\n  "version": "0.0.0"\n}\n' "$2" > "$ik_root/$1/blueprint.version"
+}
+ik_run() {   # ik_run <name> <out> [--json]
+  local name="$1" out="$2"; shift 2
+  bash "$ik_root/$name/scripts/command/project-intake.sh" "$@" > "$ik_root/$out" 2>&1
+}
+ik_json() {   # ik_json <file> <python expression over d>
+  local py
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import json' >/dev/null 2>&1; then
+      "$py" -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8')); sys.exit(0 if ($2) else 1)" "$1"
+      return $?
+    fi
+  done
+  return 2
+}
+
+ik_mk idea adopted
+printf '# Project\n\n- Name: TBD\n' > "$ik_root/idea/.ai/context/project.md"
+(cd "$ik_root/idea" && find . -type f | sort) > "$ik_root/idea.before"
+ik_run idea idea.out; ik_code=$?
+(cd "$ik_root/idea" && find . -type f | sort) > "$ik_root/idea.after"
+ok=0
+[ "$ik_code" -eq 0 ] && ok=$((ok + 1))
+grep -qE 'mode +PROJECT_DISCOVERY_REQUIRED' "$ik_root/idea.out" && ok=$((ok + 1))
+grep -q 'run discovery' "$ik_root/idea.out" && ok=$((ok + 1))
+grep -qE 'implementation +blocked' "$ik_root/idea.out" && ok=$((ok + 1))
+grep -qE 'token risk +(low|medium|high)' "$ik_root/idea.out" && ok=$((ok + 1))
+cmp -s "$ik_root/idea.before" "$ik_root/idea.after" && ok=$((ok + 1))
+assert_code 'intake: an idea-only project is sent to discovery, and nothing is written' 6 "$ok"
+
+ik_mk governed adopted
+mkdir -p "$ik_root/governed/docs/Client" "$ik_root/governed/db/migrations" "$ik_root/governed/app/billing" \
+  "$ik_root/governed/app/permissions" "$ik_root/governed/src"
+printf 'signed specification\n' > "$ik_root/governed/docs/Client/spec.md"
+printf '# Project\n\n- Name: Example\n' > "$ik_root/governed/.ai/context/project.md"
+ik_run governed governed.out; ik_code=$?
+ok=0
+[ "$ik_code" -eq 0 ] && ok=$((ok + 1))
+grep -qE 'mode +PROJECT_WITH_GOVERNING_DOCS +\(confidence (high|medium|low)\)' "$ik_root/governed.out" && ok=$((ok + 1))
+grep -qE 'tags +.*ENTERPRISE_SYSTEM' "$ik_root/governed.out" && ok=$((ok + 1))
+grep -qE 'maps +intelligence 0 of 7, discovery 0 of 6' "$ik_root/governed.out" && ok=$((ok + 1))
+grep -q 'extract project intelligence' "$ik_root/governed.out" && ok=$((ok + 1))
+[ "$(grep -c . "$ik_root/governed.out")" -le 30 ] && ok=$((ok + 1))
+assert_code 'intake: governing documents without maps route to intelligence extraction, compactly' 6 "$ok"
+
+ik_mk codebase adopted
+mkdir -p "$ik_root/codebase/src"
+printf '{}\n' > "$ik_root/codebase/package.json"
+ik_mk website adopted
+mkdir -p "$ik_root/website/src/pages" "$ik_root/website/public"
+printf 'export default {}\n' > "$ik_root/website/astro.config.mjs"
+ik_run codebase codebase.out; ik_code=$?
+ik_run website website.out; ik_code2=$?
+ok=0
+[ "$ik_code" -eq 0 ] && ok=$((ok + 1))
+grep -qE 'mode +CODEBASE_RECONSTRUCTION_REQUIRED' "$ik_root/codebase.out" && ok=$((ok + 1))
+grep -q 'reconstruct from codebase' "$ik_root/codebase.out" && ok=$((ok + 1))
+[ "$ik_code2" -eq 0 ] && ok=$((ok + 1))
+grep -qE 'mode +WEBSITE_PROJECT' "$ik_root/website.out" && ok=$((ok + 1))
+grep -q 'website review/build/deploy path' "$ik_root/website.out" && ok=$((ok + 1))
+assert_code 'intake: a codebase and a website are classified from names alone' 6 "$ok"
+
+ik_run governed governed.json --json; ik_code=$?
+ik_mk sourcefx source
+ik_run sourcefx source.out; ik_code2=$?
+ok=0
+[ "$ik_code" -eq 0 ] && ik_json "$ik_root/governed.json" "d['mode'] == 'PROJECT_WITH_GOVERNING_DOCS' and d['nextPromptFamily']['key'] == 'extract-project-intelligence'" && ok=$((ok + 1))
+ik_json "$ik_root/governed.json" "d['safety']['canModifyFiles'] is False and d['safety']['canAuthorizeCode'] is False and d['safety']['canOpenGovernanceWindow'] is False" && ok=$((ok + 1))
+ik_json "$ik_root/governed.json" "all(d['forecast'][k]['status'] for k in ('productTruth','architecture','data','governance','implementation')) and d['forecast']['tokenRisk']['level'] in ('low','medium','high')" && ok=$((ok + 1))
+ik_json "$ik_root/governed.json" "d['evidence']['total'] >= 1 and len(d['evidence']['paths']) <= 5" && ok=$((ok + 1))
+[ "$ik_code2" -eq 0 ] && grep -qE 'mode +NOT_APPLICABLE' "$ik_root/source.out" && ok=$((ok + 1))
+grep -q 'none, the source blueprint has no product of its own' "$ik_root/source.out" && ok=$((ok + 1))
+assert_code 'intake: the JSON carries mode, forecast, family, and false safety flags; a source is N/A' 6 "$ok"
+
+bash "$ik_forgeos" intake > "$ik_root/w1.txt" 2>&1; ik_w1=$?
+bash "$ik_engine" > "$ik_root/e1.txt" 2>&1
+bash "$ik_forgeos" intake --json > "$ik_root/w2.json" 2>&1
+bash "$ik_engine" --json > "$ik_root/e2.json" 2>&1
+bash "$ik_forgeos" intake --apply > "$ik_root/w3.txt" 2>&1; ik_w3=$?
+bash "$ik_forgeos" help > "$ik_root/w4.txt" 2>&1
+ok=0
+[ "$ik_w1" -eq 0 ] && cmp -s "$ik_root/w1.txt" "$ik_root/e1.txt" && ok=$((ok + 1))
+cmp -s "$ik_root/w2.json" "$ik_root/e2.json" && ok=$((ok + 1))
+[ "$ik_w3" -eq 1 ] && ok=$((ok + 1))
+grep -q 'forgeos intake' "$ik_root/w4.txt" && ok=$((ok + 1))
+assert_code 'intake: the wrapper routes intake to the engine and refuses a writing flag' 4 "$ok"
+
 # --- the POSIX installer, run for real ------------------------------------------------------------
 # This half CAN run it, so it does. The Windows half asserts the same contract from the file, which
 # is the honest split: neither pretends to exercise the other's platform.

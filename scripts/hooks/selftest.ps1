@@ -2812,6 +2812,119 @@ try {
     if ($pkg5Code -eq 1 -and $pkg5 -cmatch '"generated":\s*false') { $pkOk++ }
     Assert-ExitCode -Case 'prompt package: a reformatted policy table refuses instead of failing open' -Expected 4 -Actual $pkOk
 
+    # --- project intake: classified from names, forecast without writing ---------------------
+    # M-26 slice 1. Fixtures carry only the engine and their own blueprint.version, so the answer
+    # never depends on the host.
+    $ikEngine = Join-Path $repoRoot 'scripts\command\project-intake.ps1'
+    $ikForgeos = Join-Path $repoRoot 'scripts\command\forgeos.ps1'
+    $ikRoot = Join-Path $toolRoot 'intake'
+    New-Item -ItemType Directory -Path $ikRoot -Force | Out-Null
+    function New-IntakeFixture {
+        param([string]$Name, [string]$Role)
+        $r = Join-Path $ikRoot $Name
+        New-Item -ItemType Directory -Path (Join-Path $r 'scripts\command') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $r '.ai\context') -Force | Out-Null
+        Copy-Item -LiteralPath $ikEngine -Destination (Join-Path $r 'scripts\command\project-intake.ps1') -Force
+        [System.IO.File]::WriteAllText((Join-Path $r 'blueprint.version'),
+            ("{`n  `"role`": `"" + $Role + "`",`n  `"version`": `"0.0.0`"`n}`n"))
+        return $r
+    }
+    function Invoke-Intake {
+        param([string]$Root, [switch]$AsJson)
+        $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-intake.ps1'))
+        if ($AsJson) { $a += '-Json' }
+        $text = ((& powershell.exe @a 2>&1) | Out-String)
+        return @{ Code = $LASTEXITCODE; Text = $text }
+    }
+    function Get-IntakeFileList([string]$Root) {
+        return ((@(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
+    }
+
+    $ikIdea = New-IntakeFixture -Name 'idea' -Role 'adopted'
+    [System.IO.File]::WriteAllText((Join-Path $ikIdea '.ai\context\project.md'), "# Project`n`n- Name: TBD`n")
+    $ikBefore = Get-IntakeFileList $ikIdea
+    $ikR = Invoke-Intake -Root $ikIdea
+    $ikAfter = Get-IntakeFileList $ikIdea
+    $ikOk = 0
+    if ($ikR.Code -eq 0) { $ikOk++ }
+    if ($ikR.Text -cmatch 'mode +PROJECT_DISCOVERY_REQUIRED') { $ikOk++ }
+    if ($ikR.Text -cmatch 'run discovery') { $ikOk++ }
+    if ($ikR.Text -cmatch 'implementation +blocked') { $ikOk++ }
+    if ($ikR.Text -cmatch 'token risk +(low|medium|high)') { $ikOk++ }
+    if ($ikBefore -ceq $ikAfter) { $ikOk++ }
+    Assert-ExitCode -Case 'intake: an idea-only project is sent to discovery, and nothing is written' -Expected 6 -Actual $ikOk
+
+    $ikGov = New-IntakeFixture -Name 'governed' -Role 'adopted'
+    foreach ($sub in @('docs\Client', 'db\migrations', 'app\billing', 'app\permissions', 'src')) {
+        New-Item -ItemType Directory -Path (Join-Path $ikGov $sub) -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText((Join-Path $ikGov 'docs\Client\spec.md'), "signed specification`n")
+    [System.IO.File]::WriteAllText((Join-Path $ikGov '.ai\context\project.md'), "# Project`n`n- Name: Example`n")
+    $ikR = Invoke-Intake -Root $ikGov
+    $ikOk = 0
+    if ($ikR.Code -eq 0) { $ikOk++ }
+    if ($ikR.Text -cmatch 'mode +PROJECT_WITH_GOVERNING_DOCS +\(confidence (high|medium|low)\)') { $ikOk++ }
+    if ($ikR.Text -cmatch 'tags +.*ENTERPRISE_SYSTEM') { $ikOk++ }
+    if ($ikR.Text -cmatch 'maps +intelligence 0 of 7, discovery 0 of 6') { $ikOk++ }
+    if ($ikR.Text -cmatch 'extract project intelligence') { $ikOk++ }
+    if (@($ikR.Text -split "`r?`n" | Where-Object { $_ -ne '' }).Count -le 30) { $ikOk++ }
+    Assert-ExitCode -Case 'intake: governing documents without maps route to intelligence extraction, compactly' -Expected 6 -Actual $ikOk
+
+    $ikCode = New-IntakeFixture -Name 'codebase' -Role 'adopted'
+    New-Item -ItemType Directory -Path (Join-Path $ikCode 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $ikCode 'package.json'), "{}`n")
+    $ikWeb = New-IntakeFixture -Name 'website' -Role 'adopted'
+    New-Item -ItemType Directory -Path (Join-Path $ikWeb 'src\pages') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $ikWeb 'public') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $ikWeb 'astro.config.mjs'), "export default {}`n")
+    $ikR = Invoke-Intake -Root $ikCode
+    $ikR2 = Invoke-Intake -Root $ikWeb
+    $ikOk = 0
+    if ($ikR.Code -eq 0) { $ikOk++ }
+    if ($ikR.Text -cmatch 'mode +CODEBASE_RECONSTRUCTION_REQUIRED') { $ikOk++ }
+    if ($ikR.Text -cmatch 'reconstruct from codebase') { $ikOk++ }
+    if ($ikR2.Code -eq 0) { $ikOk++ }
+    if ($ikR2.Text -cmatch 'mode +WEBSITE_PROJECT') { $ikOk++ }
+    if ($ikR2.Text -cmatch 'website review/build/deploy path') { $ikOk++ }
+    Assert-ExitCode -Case 'intake: a codebase and a website are classified from names alone' -Expected 6 -Actual $ikOk
+
+    $ikR = Invoke-Intake -Root $ikGov -AsJson
+    $ikSrc = New-IntakeFixture -Name 'sourcefx' -Role 'source'
+    $ikR2 = Invoke-Intake -Root $ikSrc
+    $ikOk = 0
+    $ikJ = $null
+    try { $ikJ = $ikR.Text | ConvertFrom-Json } catch { $ikJ = $null }
+    if ($ikR.Code -eq 0 -and $null -ne $ikJ) {
+        try {
+            if ($ikJ.mode -ceq 'PROJECT_WITH_GOVERNING_DOCS' -and $ikJ.nextPromptFamily.key -ceq 'extract-project-intelligence') { $ikOk++ }
+            if ($ikJ.safety.canModifyFiles -eq $false -and $ikJ.safety.canAuthorizeCode -eq $false -and $ikJ.safety.canOpenGovernanceWindow -eq $false) { $ikOk++ }
+            $ikStatuses = @('productTruth', 'architecture', 'data', 'governance', 'implementation') | Where-Object { $ikJ.forecast.$_.status }
+            if (@($ikStatuses).Count -eq 5 -and @('low', 'medium', 'high') -ccontains $ikJ.forecast.tokenRisk.level) { $ikOk++ }
+            if ($ikJ.evidence.total -ge 1 -and @($ikJ.evidence.paths).Count -le 5) { $ikOk++ }
+        } catch { }
+    }
+    if ($ikR2.Code -eq 0 -and $ikR2.Text -cmatch 'mode +NOT_APPLICABLE') { $ikOk++ }
+    if ($ikR2.Text -cmatch 'none, the source blueprint has no product of its own') { $ikOk++ }
+    Assert-ExitCode -Case 'intake: the JSON carries mode, forecast, family, and false safety flags; a source is N/A' -Expected 6 -Actual $ikOk
+
+    # Under 'Stop', Windows PowerShell 5.1 turns a native command's stderr line into a terminating
+    # error even when it is redirected, and the -Apply refusal below writes one. 'Continue' for this
+    # block only, as every other stderr-writing call in this suite does.
+    $ikPrevious = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $ikW1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikForgeos intake 2>$null) | Out-String); $ikW1Code = $LASTEXITCODE
+    $ikE1 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikEngine 2>$null) | Out-String)
+    $ikW2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikForgeos intake -Json 2>$null) | Out-String)
+    $ikE2 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikEngine -Json 2>$null) | Out-String)
+    $null = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikForgeos intake -Apply 2>$null) | Out-String); $ikW3Code = $LASTEXITCODE
+    $ikW4 = ((& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ikForgeos help 2>$null) | Out-String)
+    $ErrorActionPreference = $ikPrevious
+    $ikOk = 0
+    if ($ikW1Code -eq 0 -and $ikW1 -ceq $ikE1) { $ikOk++ }
+    if ($ikW2 -ceq $ikE2) { $ikOk++ }
+    if ($ikW3Code -eq 1) { $ikOk++ }
+    if ($ikW4 -cmatch 'forgeos intake') { $ikOk++ }
+    Assert-ExitCode -Case 'intake: the wrapper routes intake to the engine and refuses a writing flag' -Expected 4 -Actual $ikOk
+
     # --- the POSIX installer, asserted from the file ------------------------------------------
     # This half cannot RUN a bash installer, and pretending otherwise would be the fake parity the
     # contributing guide forbids. The POSIX half runs it end to end; this one asserts the same

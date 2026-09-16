@@ -37,7 +37,7 @@ gained a write path would have to change them, and a self-test case fails if any
 
 | Command | Purpose | Status |
 | --- | --- | --- |
-| `forgeos` | The local command surface: `status`, `next`, `prompt`, `doctor`, `version`, `adopt`, `update` | **implemented** — complete |
+| `forgeos` | The local command surface: `status`, `next`, `prompt`, `brief`, `intake`, `doctor`, `version`, `adopt`, `update` | **implemented** — complete |
 | `project-status` | Report where the project is, from files | **implemented** |
 | `project-map` | The system as it is: ten documentation and state surfaces | **implemented**, inside `project-status` as the `map` object |
 | `next-slice` | The next incomplete capability, and whether anything blocks it | **implemented**, as `nextRecommendation` |
@@ -47,7 +47,9 @@ gained a write path would have to change them, and a self-test case fails if any
 | `session-package` | Everything a coordinator would be asked for the next session: session, model, effort, scope, policy, reading order, report shape, and a paste-ready prompt | **implemented**, as `forgeos prompt` / `--section prompt` |
 | `session-brief` | The same package cut to what a session must not get wrong, under a measured budget of 800 tokens (UTF-8 bytes / 4), with the same refusals | **implemented**, as `forgeos brief` / `forgeos prompt --brief` / `--section brief` |
 
-All eight are one command today. They are named separately because they answer separate questions and
+| `project-intake` | What kind of project this is, how ready it is, and which prompt family the next session belongs to | **implemented**, as `forgeos intake` — a separate engine |
+
+The eight rows above `project-intake` are one command today. They are named separately because they answer separate questions and
 may become separate entry points; splitting them later changes no field.
 
 ## The `forgeos` command
@@ -373,6 +375,39 @@ rather than a fact about the project; `capability` still reads `unknown`, so not
 The prohibitions are then matched against that phase, which is what keeps a prompt about the CLI
 phase from telling its reader to avoid the CLI.
 
+## `intake` — what kind of project this is
+
+`forgeos intake [--json]` routes to `project-intake`, a read-only engine separate from
+`project-status`: it answers a different question and reads different evidence. M-26 slice 1 of the
+project intake, forecast, and next-prompt layer.
+
+**Mode**, with a confidence (`high`, `medium`, `low`) from how many signals support it, and tags for
+the other modes that also apply:
+
+| Mode | Chosen when |
+| --- | --- |
+| `PROJECT_WITH_GOVERNING_DOCS` | A governing directory holds a file (`docs/Client`, `docs/Developer`, `docs/data`, `docs/specifications`, `docs/specs`), or `.ai/product/authority-map.md` declares sources elsewhere |
+| `WEBSITE_PROJECT` | No governing documents; a site configuration file, or a pages directory beside `public` |
+| `ENTERPRISE_SYSTEM` | No governing documents; three or more distinct business-system directory names within depth 3 (migrations, permissions, billing, tenants, and similar) |
+| `CODEBASE_RECONSTRUCTION_REQUIRED` | No governing documents; application signals such as a package manifest or a `src` directory, and neither of the two above |
+| `PROJECT_DISCOVERY_REQUIRED` | None of the above |
+| `NOT_APPLICABLE` | The `source` role: the blueprint has no product of its own |
+
+**Forecast**, one line each, status `ready`, `partial`, `missing`, `blocked`, or `n/a` with a short
+reason: product truth, architecture, data, governance, implementation, and token risk (`low`,
+`medium`, `high`, from always-loaded bytes / 4, governing documents over 200 KB, and unmapped
+governing documents). **Next prompt family:** extract project intelligence, run discovery,
+reconstruct from codebase, website review/build/deploy, enterprise module/phasing, blocked owner
+decision, or safe implementation — each with the one file to read first.
+
+**What keeps it cheap.** It reads names, sizes, and presence. It opens three small files —
+`blueprint.version`, `.ai/context/project.md` for a `TBD` marker, `.ai/context/governance.json` for
+`codeAuthorized` — and never a governing document. The directory walk stops at depth 3 and 5000
+directories and prunes dependency, build, and tooling directories. Evidence lists show three entries
+and a count; JSON arrays hold at most five. The signal names are detection data, not requirements, and
+the token figures are estimates: no saving is claimed. JSON carries `forgeos.project-intake/1` and the
+safety flags `canModifyFiles`, `canAuthorizeCode`, and `canOpenGovernanceWindow`, all `false`.
+
 ## `doctor` — whether this installation can run
 
 Nine rows, each `ok` / `missing` / `unknown`, each marked required or optional, and each carrying a
@@ -618,3 +653,11 @@ and order on both shells:
 - an unsupported argument to `version` exits `1` with the usage text, on **both** shells — the
   PowerShell half collects unmatched arguments itself rather than letting the binder answer, so the
   two shells report the same mistake the same way
+- `intake` sends an idea-only fixture to discovery with implementation blocked and a token-risk line,
+  and leaves the fixture's files unchanged
+- `intake` routes governing documents without maps to intelligence extraction, tags an enterprise
+  system, and stays within 30 lines
+- `intake` classifies a codebase and a website from names alone
+- the `intake` JSON carries the mode, all six forecast fields, the prompt family, capped evidence, and
+  `false` safety flags, and a `source` fixture reports `NOT_APPLICABLE`
+- `forgeos intake` is byte-identical to the engine in both modes, and `intake --apply` exits `1`

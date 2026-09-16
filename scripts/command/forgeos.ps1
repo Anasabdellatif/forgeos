@@ -6,7 +6,8 @@
     A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next`, `prompt` and `brief` describe
     the PROJECT, so they route to project-status and add nothing: the reading, the schema and the flags
     belong to that one command, and a second place that read the same files would be a second
-    answer waiting to disagree. `doctor` and `version` describe the INSTALLATION, so they are
+    answer waiting to disagree. `intake` describes the project too, and routes the same way to
+    project-intake. `doctor` and `version` describe the INSTALLATION, so they are
     implemented here -- neither duplicates the engine, and neither could route to a command that
     may itself be the missing piece.
 
@@ -20,7 +21,7 @@
     this checkout, so there is no channel, no fetch and no version discovery.
 
 .PARAMETER Command
-    status, next, prompt, brief, doctor, version, adopt, or update.
+    status, next, prompt, brief, intake, doctor, version, adopt, or update.
 
 .PARAMETER Json
     Emit JSON on stdout and nothing else.
@@ -95,6 +96,8 @@ function Show-Usage {
         '  forgeos brief   [--json]   the same package cut to at most 800 tokens: session, state,',
         '                             capability, guardrails, and a paste-ready brief. Same refusals.',
         '                             Also reachable as: forgeos prompt --brief',
+        '  forgeos intake  [--json]   what kind of project this is, how ready it is, and which prompt',
+        '                             family the next session belongs to. Names and sizes only.',
         '  forgeos doctor  [--json]   whether this ForgeOS installation can run',
         '  forgeos version [--json]   which ForgeOS this is, and where it sits',
         '  forgeos adopt  -Target <path> [-Apply] [-Json]',
@@ -168,6 +171,18 @@ switch ($Command) {
         # `brief` and `prompt -Brief` are one section by two names, so they cannot drift apart.
         if ($Command -eq 'brief' -or ($Command -eq 'prompt' -and $Brief)) { $argv += @('-Section', 'brief') }
         elseif ($Command -eq 'prompt') { $argv += @('-Section', 'prompt') }
+        & powershell.exe @argv
+        exit $LASTEXITCODE
+    }
+    'intake' {
+        $intakeCmd = Join-Path $here 'project-intake.ps1'
+        if (-not (Test-Path -LiteralPath $intakeCmd)) {
+            [Console]::Error.WriteLine("Cannot run: project-intake.ps1 is missing from $here")
+            [Console]::Error.WriteLine('Run "forgeos doctor" for the full picture.')
+            exit 1
+        }
+        $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $intakeCmd)
+        if ($Json) { $argv += '-Json' }
         & powershell.exe @argv
         exit $LASTEXITCODE
     }

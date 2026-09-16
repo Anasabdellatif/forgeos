@@ -189,6 +189,8 @@
     "scripts/command/forgeos.sh",
     "scripts/command/project-status.ps1",
     "scripts/command/project-status.sh",
+    "scripts/command/project-intake.ps1",
+    "scripts/command/project-intake.sh",
     "scripts/install/install-forgeos.ps1",
     "scripts/install/install-forgeos.sh",
     "scripts/lib/blueprint-manifest.json",

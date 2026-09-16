@@ -183,6 +183,23 @@ grep -qE '(curl|wget|iwr|Invoke-WebRequest)[^|]*\|[^|]*(sh|bash|iex)' "$WF" || o
 [ "$(grep -cE '^ *- uses: ' "$WF")" = "$(grep -cE '^ *- uses: actions/' "$WF")" ] && ok=$((ok + 1))
 assert_code 'release: the workflow builds from the ref, verifies, and uploads the artifact' 6 "$ok"
 
+# --- 7. The install matrix stays home in spirit ----------------------------------------------------
+# validate.yml IS portable, and its two install-matrix jobs build a release artifact with the
+# source-only builder. An adopting project has no builder, so each job records whether its builder is
+# present and every later step reads that answer: skipped where the tooling is absent, never failed.
+# Here-strings, not pipes into grep -q, so an early grep exit cannot fail the pipeline.
+VWF="$REPO_ROOT/.github/workflows/validate.yml"
+ok=0
+for pair in 'install-windows:build-artifact.ps1' 'install-posix:build-artifact.sh'; do
+  job="${pair%%:*}"; builder="${pair#*:}"
+  block="$(awk -v j="  $job:" '$0 == j {f=1; next} f && /^  [a-z0-9_-]+:[ \t]*$/ {exit} f' "$VWF" 2>/dev/null)"
+  grep -qF "hashFiles('scripts/release/$builder') != ''" <<<"$block" && ok=$((ok + 1))
+  steps="$(grep -cE '^      - name: ' <<<"$block")"
+  guarded="$(grep -cF "if: steps.source.outputs.present == 'true'" <<<"$block")"
+  [ "$steps" -gt 1 ] && [ "$guarded" -eq $((steps - 1)) ] && ok=$((ok + 1))
+done
+assert_code 'release: the install matrix skips every step where the source-only builder is absent' 4 "$ok"
+
 rm -f "$PROBE"
 
 echo ''

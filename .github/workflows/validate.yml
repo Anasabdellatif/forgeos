@@ -242,6 +242,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # SOURCE-ONLY, like the release self-test in the check-all jobs. This job builds a ForgeOS
+      # release artifact with scripts/release/, which sync never copies into an adopting project --
+      # and this workflow IS copied. So it asks first: where the builder is absent, every step below
+      # is skipped and the job ends green with a notice, instead of failing on a file that was never
+      # meant to be there. hashFiles cannot guard the job itself, because a job-level `if` is
+      # evaluated before checkout, so the answer is recorded once here and read by each step.
+      - name: Release builder present (source repository only)
+        id: source
+        shell: bash
+        env:
+          PRESENT: ${{ hashFiles('scripts/release/build-artifact.ps1') != '' }}
+        run: |
+          echo "present=$PRESENT" >> "$GITHUB_OUTPUT"
+          if [ "$PRESENT" != 'true' ]; then
+            echo "::notice title=Install matrix skipped::scripts/release/build-artifact.ps1 is source-only and absent here; this job tests ForgeOS releases, not this project."
+          fi
+
       # (1) OBTAIN. A real release-style artifact and its checksum, built from the tracked tree by
       # the same script a release uses. Nothing is fetched: the source of the install is a file this
       # job made, which is what makes condition 4 -- no network after the obtain step -- structural
@@ -256,6 +273,7 @@ jobs:
       # Extracted BESIDE the .sha256 on purpose: the installer looks for the checksum in the parent
       # of the source root, which is the layout a person downloading a release actually has.
       - name: Build a release artifact, extract it beside its checksum
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path art -Force | Out-Null
@@ -274,6 +292,7 @@ jobs:
       # blueprint.version, which a 3-file archive still carried, so it passed and the real problem
       # surfaced two steps later as a confusing installer refusal.
       - name: The artifact is complete, not merely present
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           $tgz = @(Get-ChildItem art\*.tar.gz -ErrorAction SilentlyContinue)
@@ -298,6 +317,7 @@ jobs:
       # The corruption gets its own steps so the byte is flipped AFTER a known-good extraction, and
       # so a failure here is unambiguous about which half broke.
       - name: Copy the artifact aside and extract it
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path bad, bad-dest -Force | Out-Null
@@ -311,6 +331,7 @@ jobs:
       # otherwise install: if the extracted tree is incomplete the installer refuses for that reason
       # instead, and a green step would mean nothing. Prove the tree is usable BEFORE corrupting it.
       - name: The extracted copy is a complete ForgeOS before anything is corrupted
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           if (-not $env:BAD_SRC) { throw 'BAD_SRC was not set: the extraction produced no source root' }
@@ -321,6 +342,7 @@ jobs:
           Write-Host "  complete ForgeOS at $env:BAD_SRC"
 
       - name: A corrupted artifact is refused, and writes nothing
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           $archive = (Get-ChildItem bad\*.tar.gz)[0].FullName
@@ -349,6 +371,7 @@ jobs:
       # (3) INSTALL. Dry run first, because dry run is the default everywhere here that writes and
       # a channel that quietly wrote on a report would be a different channel.
       - name: Dry run writes nothing, then -Apply installs
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dest -Force | Out-Null
@@ -368,6 +391,7 @@ jobs:
       # (4) THE INSTALLED COMMAND ANSWERS. Through the shim, never beside it: an install that only
       # places files has not been shown to install anything.
       - name: The installed command answers version and doctor
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           $v = (& "$PWD\dest\forgeos.cmd" version --json) -join "`n"
@@ -378,6 +402,7 @@ jobs:
 
       # (5) PATH IS NEVER CHANGED. Asserted after a real install, not from the source text.
       - name: PATH was not mutated
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           $u = [Environment]::GetEnvironmentVariable('PATH', 'User')
@@ -387,6 +412,7 @@ jobs:
           Write-Host '  user and machine PATH both unchanged'
 
       - name: -Force is refused
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path force-dest -Force | Out-Null
@@ -401,6 +427,7 @@ jobs:
       # project's own check-all. This is the condition the ladder actually turns on: not that the
       # installer placed files, but that what it installed can carry a project.
       - name: Adopt a project through the installed command, then validate it
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path proj -Force | Out-Null
@@ -417,6 +444,7 @@ jobs:
       # (7) THE CUSTOMIZATION GUARANTEE SURVIVES THE CHANNEL. Edit a file the project owns, update
       # through the installed command, and require the edit to still be there.
       - name: A customized file survives an update through the installed command
+        if: steps.source.outputs.present == 'true'
         shell: pwsh
         run: |
           # A PORTABLE file, deliberately. Editing something under .ai/context/ would prove nothing:
@@ -440,8 +468,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # SOURCE-ONLY, like the release self-test in the check-all jobs. This job builds a ForgeOS
+      # release artifact with scripts/release/, which sync never copies into an adopting project --
+      # and this workflow IS copied. So it asks first: where the builder is absent, every step below
+      # is skipped and the job ends green with a notice, instead of failing on a file that was never
+      # meant to be there. hashFiles cannot guard the job itself, because a job-level `if` is
+      # evaluated before checkout, so the answer is recorded once here and read by each step.
+      - name: Release builder present (source repository only)
+        id: source
+        shell: bash
+        env:
+          PRESENT: ${{ hashFiles('scripts/release/build-artifact.sh') != '' }}
+        run: |
+          echo "present=$PRESENT" >> "$GITHUB_OUTPUT"
+          if [ "$PRESENT" != 'true' ]; then
+            echo "::notice title=Install matrix skipped::scripts/release/build-artifact.sh is source-only and absent here; this job tests ForgeOS releases, not this project."
+          fi
+
       # (1) OBTAIN, offline, from the tracked tree.
       - name: Build a release artifact, extract it beside its checksum
+        if: steps.source.outputs.present == 'true'
         run: |
           mkdir -p art
           bash scripts/release/build-artifact.sh --out art
@@ -450,10 +496,12 @@ jobs:
           ls -l art
 
       - name: The checksum verifies the artifact it names
+        if: steps.source.outputs.present == 'true'
         run: cd art && sha256sum -c ./*.sha256
 
       # (2) AND IT MUST REJECT A CORRUPTED ONE.
       - name: A corrupted artifact is refused, and writes nothing
+        if: steps.source.outputs.present == 'true'
         run: |
           mkdir -p bad bad-dest
           cp art/*.tar.gz art/*.tar.gz.sha256 bad/
@@ -479,6 +527,7 @@ jobs:
 
       # (3) INSTALL: dry run writes nothing, --apply writes one EXECUTABLE launcher.
       - name: Dry run writes nothing, then --apply installs
+        if: steps.source.outputs.present == 'true'
         run: |
           mkdir -p dest
           bash scripts/install/install-forgeos.sh --source "$SRC" --destination dest
@@ -491,6 +540,7 @@ jobs:
 
       # (4) THE INSTALLED COMMAND ANSWERS, through the launcher.
       - name: The installed command answers version and doctor
+        if: steps.source.outputs.present == 'true'
         run: |
           v="$(./dest/forgeos version --json)"
           o="$(./dest/forgeos doctor --json)"
@@ -500,6 +550,7 @@ jobs:
 
       # (5) PATH IS NEVER CHANGED, and no shell profile is written.
       - name: PATH was not mutated
+        if: steps.source.outputs.present == 'true'
         run: |
           case ":$PATH:" in *":$PWD/dest:"*) echo 'The installer put itself on PATH'; exit 1 ;; esac
           for f in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
@@ -508,6 +559,7 @@ jobs:
           echo '  PATH and every shell profile are untouched'
 
       - name: --force is refused
+        if: steps.source.outputs.present == 'true'
         run: |
           mkdir -p force-dest
           set +e
@@ -520,6 +572,7 @@ jobs:
 
       # (6) END TO END: adopt through the installed command, then validate that project.
       - name: Adopt a project through the installed command, then validate it
+        if: steps.source.outputs.present == 'true'
         run: |
           mkdir -p proj
           git -C proj init -q .
@@ -530,6 +583,7 @@ jobs:
 
       # (7) THE CUSTOMIZATION GUARANTEE SURVIVES THE CHANNEL.
       - name: A customized file survives an update through the installed command
+        if: steps.source.outputs.present == 'true'
         run: |
           # A PORTABLE file, deliberately. Editing something under .ai/context/ would prove nothing:
           # that half is project-specific, so sync never compares it and it survives by construction.

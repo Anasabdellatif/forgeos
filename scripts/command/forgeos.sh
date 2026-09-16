@@ -4,7 +4,7 @@
 # A WRAPPER FOR THE PROJECT, AN ENGINE FOR ITSELF. `status`, `next`, `prompt` and `brief` describe the PROJECT,
 # so they route to project-status and add nothing: the reading, the schema and the flags belong to
 # that one command, and a second place that read the same files would be a second answer waiting to
-# disagree. `doctor` and `version` describe the INSTALLATION, so they are implemented here -- neither
+# disagree. `intake` describes the project too, and routes the same way to project-intake. `doctor` and `version` describe the INSTALLATION, so they are implemented here -- neither
 # duplicates the engine, and neither could route to a command that may itself be the missing piece.
 #
 # READ-ONLY EXCEPT ON TWO EXPLICIT PATHS. Every command here reads and nothing more, with two
@@ -16,7 +16,7 @@
 # refuses a target that has never adopted. Nothing here touches the network: the source is always
 # this checkout, so there is no channel, no fetch and no version discovery.
 #
-# Usage: forgeos.sh <status|next|prompt|brief|doctor|version|adopt|update> [--json] [--brief]
+# Usage: forgeos.sh <status|next|prompt|brief|intake|doctor|version|adopt|update> [--json] [--brief]
 # Exit 0 reported; 1 usage error or could not run; 2 is reserved by the house convention for a gate
 # refusal and no command here can produce one.
 
@@ -43,6 +43,8 @@ Usage:
   forgeos brief   [--json]   the same package cut to at most 800 tokens: session, state,
                              capability, guardrails, and a paste-ready brief. Same refusals.
                              Also reachable as: forgeos prompt --brief
+  forgeos intake  [--json]   what kind of project this is, how ready it is, and which prompt
+                             family the next session belongs to. Names and sizes only.
   forgeos doctor  [--json]   whether this ForgeOS installation can run
   forgeos version [--json]   which ForgeOS this is, and where it sits
   forgeos adopt  --target <path> [--apply] [--json]
@@ -109,6 +111,16 @@ case "$CMD" in
       args+=('--section' 'prompt')
     fi
     bash "$STATUS" ${args[@]+"${args[@]}"}
+    exit $?
+    ;;
+  intake)
+    INTAKE="$HERE/project-intake.sh"
+    [ -f "$INTAKE" ] || {
+      echo "Cannot run: project-intake.sh is missing from $HERE" >&2
+      echo 'Run "forgeos doctor" for the full picture.' >&2
+      exit 1
+    }
+    if [ "$JSON" -eq 1 ]; then bash "$INTAKE" --json; else bash "$INTAKE"; fi
     exit $?
     ;;
   doctor|version|adopt|update) ;;

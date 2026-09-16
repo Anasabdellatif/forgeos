@@ -226,6 +226,30 @@ try {
     $usesOfficial = @($wfLines | Where-Object { $_ -match '^\s*- uses: actions/' }).Count
     if ($usesAll -eq $usesOfficial) { $ok++ }
     Assert-Count -Case 'release: the workflow builds from the ref, verifies, and uploads the artifact' -Expected 6 -Actual $ok
+
+    # --- 7. The install matrix stays home in spirit --------------------------------------------
+    # validate.yml IS portable, and its two install-matrix jobs build a release artifact with the
+    # source-only builder. An adopting project has no builder, so each job records whether its
+    # builder is present and every later step reads that answer: skipped where the tooling is absent,
+    # never failed.
+    $vwf = Join-Path $repoRoot '.github/workflows/validate.yml'
+    $vLines = @()
+    if (Test-Path -LiteralPath $vwf) { $vLines = @(Get-Content -LiteralPath $vwf) }
+    $ok = 0
+    foreach ($pair in @(@('install-windows', 'build-artifact.ps1'), @('install-posix', 'build-artifact.sh'))) {
+        $block = New-Object System.Collections.Generic.List[string]
+        $inside = $false
+        foreach ($l in $vLines) {
+            if ($l -ceq ('  ' + $pair[0] + ':')) { $inside = $true; continue }
+            if ($inside -and $l -cmatch '^  [a-z0-9_-]+:\s*$') { break }
+            if ($inside) { $block.Add($l) }
+        }
+        if (($block -join "`n").Contains("hashFiles('scripts/release/" + $pair[1] + "') != ''")) { $ok++ }
+        $steps = @($block | Where-Object { $_ -cmatch '^      - name: ' }).Count
+        $guarded = @($block | Where-Object { $_.Contains("if: steps.source.outputs.present == 'true'") }).Count
+        if ($steps -gt 1 -and $guarded -eq ($steps - 1)) { $ok++ }
+    }
+    Assert-Count -Case 'release: the install matrix skips every step where the source-only builder is absent' -Expected 4 -Actual $ok
 }
 finally {
     if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe }

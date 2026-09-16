@@ -87,6 +87,15 @@ beyond `contents`, and that it builds from the ref, verifies, and uploads only t
 Removing the declaration makes the first fail 2/3 — and makes `sync` copy the workflow into the next
 project that adopts, which a portable self-test case then catches at 3/4.
 
+### The install matrix in `validate.yml`
+
+`validate.yml` is portable, and its `install-windows` and `install-posix` jobs build an artifact with
+this directory's builder. Each job's first step after checkout asks whether its builder is present
+(`build-artifact.ps1` on Windows, `build-artifact.sh` on Ubuntu), and every later step runs only when
+it is. Here the matrix runs in full; in an adopting project, where this directory never arrives, the
+job ends green with a notice instead of failing on a file that was never meant to be there. The
+release self-test asserts the guard covers every step.
+
 ## What this tooling does not do
 
 The builder does not publish, tag, sign, or upload anything, and it never touches the network.

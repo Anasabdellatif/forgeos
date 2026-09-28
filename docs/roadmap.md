@@ -51,6 +51,15 @@ at most one declared criterion outstanding, and the roadmap must name which one.
   POSIX, so a published checksum is reproducible rather than merely recorded.
 - **Cross-platform consistency.** The discovery gate and the placeholder checker share one detector,
   and both shells report undeclared files.
+- **The brief pays its own budget.** `forgeos brief` measures what it is about to print and
+  drops optional content whole, in a fixed order, naming what it dropped. Mandatory content is
+  never touched, and a mandatory-only overflow is reported rather than truncated. The figure is
+  UTF-8 bytes over four, labelled an estimate everywhere it appears.
+- **One mandatory-rule contract in both shells.** The prohibition list handed to a session was
+  parsed differently on PowerShell and POSIX: a tab-indented rule was dropped on one shell,
+  `when-not` matched case-sensitively on one and not the other, and a padded separator sent a
+  well-formed rule down the malformed path. All three were reproduced on a shared fixture before
+  being changed, and output parity is now asserted case by case rather than by matching test names.
 - **The install matrix is adopter-safe.** Its two jobs skip where the source-only release builder is
   absent, so an adopted project no longer inherits two jobs it could never pass. Reported green on
   one adopted project after its update, by its owner.

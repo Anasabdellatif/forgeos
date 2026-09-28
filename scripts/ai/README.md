@@ -8,7 +8,7 @@ Task-lifecycle automation. Available as `.ps1` and `.sh` with identical behavior
 | --- | --- | --- |
 | `new-task` | Creates a task or bug from a template, with a dated slug filename | Overwrite an existing record · open an **active** task while the project is still undefined |
 | `build-context` | Builds a deterministic context package for transfer | Include an oversized file, or one containing secret-like content |
-| `finish-task` | Gates closure on five mechanical checks, then archives the task and its plan. Records the discovery state at closure | Close a task with unchecked criteria, pending evidence, an active blocker, or unreplaced placeholders · archive a task opened outside the gate **without leaving a trace** |
+| `finish-task` | Gates closure on six mechanical checks, then sets the record to `completed` and archives the task and its plan together. Records the discovery state at closure | Close a task with unchecked criteria, pending evidence, an active blocker, or unreplaced placeholders · archive a task opened outside the gate **without leaving a trace** |
 
 ## Usage
 
@@ -88,6 +88,20 @@ denied to the write tools in `.claude/settings.json`, and it stays that way.
 Neither script restates what "undefined" means. Both ask `check-placeholders`, which owns the rule.
 
 `-WhatIf` (PowerShell) and `--check` (both) report without moving anything.
+
+## Recovering an interrupted closure
+
+If a closure was interrupted, the same record can sit in `active/` and `completed/` at once. Run
+`finish-task` again on either path:
+
+- **Same record**: the active copy is removed and the closure finishes — `Recovered an interrupted
+  closure`. Run it with `--check` first if you want to see the verdict before anything moves.
+- **Different records**: `CONFLICT`, exit `2`, nothing touched. Compare the two files, keep the one
+  that is right, delete the other, then close again.
+
+Comparison ignores exactly what a closure changes — the first `Status`, the first `Updated`, the
+first `Related plan`, and an appended discovery-gate note — and compares everything else verbatim.
+A matching filename is never taken as proof that two records are the same.
 
 ## Exit codes
 

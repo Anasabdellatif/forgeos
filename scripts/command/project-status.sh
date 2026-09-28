@@ -120,7 +120,10 @@ count_md() {   # count_md <dir> -> a count, or 'null' when the directory does no
   # field becomes two lines. Count into a variable and normalise instead.
   [ -d "$1" ] || { printf 'null'; return; }
   local n
-  n="$(find "$1" -maxdepth 1 -type f -name '*.md' 2>/dev/null | grep -v '/README\.md$' | grep -c . )"
+  # A forwarding record carries `Status: `moved``: it keeps a historical reference resolving after
+  # its plan was archived, and it is NOT work in progress, so it is not counted as one.
+  n="$(find "$1" -maxdepth 1 -type f -name '*.md' 2>/dev/null | grep -v '/README\.md$'        | while IFS= read -r f; do grep -qxF -- '- Status: `moved`' "$f" || printf '%s
+' "$f"; done | grep -c . )"
   printf '%s' "${n:-0}"
 }
 t_inbox="$(count_md "$REPO_ROOT/.ai/tasks/inbox")"
@@ -602,7 +605,11 @@ fi
 # section, and reading the empty string kept every prohibition -- so a prompt titled with the CLI
 # phase also told its reader not to start CLI work. The subject is the phase in that case.
 sect_l="$(printf '%s' "${next_section:-$next_phase}" | tr 'A-Z' 'a-z')"
-sect_has() { printf '%s' "$sect_l" | grep -qE "$1"; }
+# Case-insensitive, like the PowerShell half's -notmatch. Lowercasing the subject alone was not the
+# same thing: it normalizes one side of the comparison and leaves the author's regex as written, so
+# `when-not \`BILLING\`` suppressed its rule on Windows and kept it here. A prohibition must not
+# depend on how the person who wrote it happened to capitalize their pattern.
+sect_has() { printf '%s' "$sect_l" | grep -qiE "$1"; }
 dn=''
 add_dn() { if [ -z "$dn" ]; then dn="$1"; else dn="$dn
 $1"; fi; }
@@ -620,6 +627,13 @@ $1"; fi; }
 # Two forms, and nothing else is read:
 #   - when-not `regex`: text     emitted unless the named slice is about that subject
 #   - text                       always emitted
+#
+# ONE RULE CONTRACT, BOTH SHELLS. A bullet is a `-` followed by at least one space or tab, and the
+# text is what remains once that marker and any surrounding spaces or tabs are removed. Requiring
+# exactly "- " here cost a rule: an author who indented with a tab wrote a prohibition that this
+# half dropped in silence while the PowerShell half emitted it. Losing a "do not" to an invisible
+# character is the failure mode this section exists to prevent, so the marker is tolerant and the
+# text is trimmed. Nothing inside the text is touched.
 CONSTRAINTS="$REPO_ROOT/.ai/context/constraints.md"
 dn_found=0
 if [ -r "$CONSTRAINTS" ]; then
@@ -629,10 +643,14 @@ if [ -r "$CONSTRAINTS" ]; then
     [ -z "$line" ] && continue
     dn_found=1
     case "$line" in
-      'when-not '*)
-        # Split on the FIRST ": " after the closing backtick, so a regex may contain anything.
-        cond="$(printf '%s' "$line" | sed -n 's/^when-not `\(.*\)`: .*$/\1/p')"
-        text="$(printf '%s' "$line" | sed -n 's/^when-not `.*`: \(.*\)$/\1/p')"
+      when-not[[:blank:]]*)
+        # Split on the LAST ": " after a closing backtick, so a regex may contain anything. The
+        # separators are runs of spaces or tabs, matched with [[:blank:]] because a bracket class
+        # travels through sed intact where a \t does not. Insisting on exactly one space here sent
+        # a well-formed rule down the malformed path: it printed verbatim and its condition never
+        # ran, while the PowerShell half applied it. Same file, two meanings.
+        cond="$(printf '%s' "$line" | sed -n 's/^when-not[[:blank:]]\{1,\}`\(.*\)`:[[:blank:]]*\(.*\)$/\1/p')"
+        text="$(printf '%s' "$line" | sed -n 's/^when-not[[:blank:]]\{1,\}`\(.*\)`:[[:blank:]]*\(.*\)$/\2/p')"
         if [ -n "$cond" ] && [ -n "$text" ]; then
           sect_has "$cond" || add_dn "- $text"
         else
@@ -651,7 +669,11 @@ $(awk '
   # format using bullets of its own, and reading those emitted the documentation as prohibitions --
   # found by running it. The subsections are what make the section both readable and parseable.
   inside && /^### / { sub_on = 1; next }
-  inside && sub_on && /^- / { sub(/^- /, ""); print }
+  inside && sub_on && /^-[ \t]/ {
+    sub(/^-[ \t]+/, "")
+    sub(/[ \t\r]+$/, "")
+    if (length($0)) print
+  }
 ' "$CONSTRAINTS")
 EOF
 fi
@@ -1013,6 +1035,7 @@ brief_alt_found='false'; brief_alt_source='none'; brief_alt_candidates=''
 if [ "$rec_blocked" = 'true' ]; then
   brief_blockers_text="$(printf '%s\n' "$rec_blockers" | awk 'NF { a = a (a ? "; " : "") $0 } END { print a }')"
   brief_blocked_text="Blocked: yes -- $brief_blockers_text. Do not start the capability above while a blocker stands."
+  brief_blocked_first="$brief_blocked_text"
   brief_inbox_count="$(printf '%s\n' "$t_inbox_names" | grep -c .)"
   if [ "$brief_inbox_count" -gt 0 ]; then
     brief_alt_found='true'; brief_alt_source='.ai/tasks/inbox'; brief_alt_candidates="$t_inbox_names"
@@ -1025,38 +1048,116 @@ Alternative: none found in repository state -- .ai/tasks/inbox/ holds no task re
   fi
 else
   brief_blocked_text='Blocked: no -- proceed with the capability above.'
+  brief_blocked_first="$brief_blocked_text"
 fi
-brief_prompt="$(cat <<BRIEFEOF
-# ForgeOS brief -- $prompt_subject
+# --- the budget ladder ---------------------------------------------------------------------------
+# MANDATORY, never touched: the single-agent rule, the repository identity, the capability and the
+# row that defines it, the blocked verdict, the read-first instruction and entry point, governance
+# and scope, the Do-not list, and the report and push policy.
+#
+# Everything else is optional context, dropped WHOLE in a fixed order -- never truncated mid
+# sentence, and never a rule, an identifier, or a usable path. Each removal leaves a real file or a
+# real command that still answers the question, so nothing becomes unreachable by shortening it.
+brief_max_level=7
 
-Session: $pkg_session_name | new session: $pkg_new_session | model: $pkg_model | effort: $pkg_effort
-Execution: single-agent only -- no subagents, review swarms, or background task loops.
-Repository: $repo_name @ $branch | HEAD $commit | version $bp_version | state $project_state
-Now: $brief_now
-Capability: $rec_capability -- its acceptance criteria are its row in $rec_source; read that row before writing anything.
-$brief_blocked_text
+brief_notes_for() {   # brief_notes_for <level> -> what was shortened, in words
+  local lvl="$1" n=''
+  [ "$lvl" -ge 1 ] && n="${n:+$n, }economy detail (.ai/contract/economy.md section 4)"
+  [ "$lvl" -ge 2 ] && n="${n:+$n, }pre-checks (already above)"
+  [ "$lvl" -ge 3 ] && n="${n:+$n, }validation plans (forgeos prompt)"
+  [ "$lvl" -ge 4 ] && n="${n:+$n, }alternative names (.ai/tasks/inbox/)"
+  [ "$lvl" -ge 5 ] && n="${n:+$n, }read list (forgeos prompt)"
+  [ "$lvl" -ge 6 ] && n="${n:+$n, }session and policy (forgeos prompt)"
+  [ "$lvl" -ge 7 ] && n="${n:+$n, }ledger line (.ai/context/current-state.md)"
+  printf '%s' "$n"
+}
 
-Read first: $brief_read_text
-The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.
+brief_body() {   # brief_body <level>
+  local lvl="$1" b_blocked="$brief_blocked_text" b_read="$brief_read_text" total shown
+  if [ "$lvl" -ge 4 ] && [ "$brief_alt_found" = 'true' ]; then
+    b_blocked="$brief_blocked_first
+Alternative: not chosen here -- $brief_inbox_count task record(s) already written in .ai/tasks/inbox/; read each record's Blocked section before activating one."
+  fi
+  if [ "$lvl" -ge 5 ]; then
+    total="$(printf '%s\n' "$brief_read" | grep -c .)"
+    if [ "$total" -gt 3 ]; then
+      shown="$(printf '%s\n' "$brief_read" | head -3 | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+      b_read="$shown, and $((total - 3)) more that forgeos prompt lists in full"
+    fi
+  fi
 
-Pre-checks: clean tree on $branch; HEAD is $commit; version is $bp_version; reproduce any defect before fixing it.
-Governance: $gov_line
-Scope: allowed -- $pkg_allowed. Forbidden -- $brief_forbidden.
-Validation: narrow -- $vp_first_narrow; full -- $vp_first_full; ShellCheck from CI: $vp_ci
-Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.
+  printf '# ForgeOS brief -- %s\n\n' "$prompt_subject"
+  [ "$lvl" -le 5 ] && printf 'Session: %s | new session: %s | model: %s | effort: %s\n' \
+    "$pkg_session_name" "$pkg_new_session" "$pkg_model" "$pkg_effort"
+  printf 'Execution: single-agent only -- no subagents, review swarms, or background task loops.\n'
+  printf 'Repository: %s @ %s | HEAD %s | version %s | state %s\n' \
+    "$repo_name" "$branch" "$commit" "$bp_version" "$project_state"
+  [ "$lvl" -le 6 ] && printf 'Now: %s\n' "$brief_now"
+  printf 'Capability: %s -- its acceptance criteria are its row in %s; read that row before writing anything.\n' \
+    "$rec_capability" "$rec_source"
+  printf '%s\n' "$b_blocked"
+  printf '\nRead first: %s\n' "$b_read"
+  printf 'The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.\n\n'
+  [ "$lvl" -le 1 ] && printf 'Pre-checks: clean tree on %s; HEAD is %s; version is %s; reproduce any defect before fixing it.\n' \
+    "$branch" "$commit" "$bp_version"
+  printf 'Governance: %s\n' "$gov_line"
+  printf 'Scope: allowed -- %s. Forbidden -- %s.\n' "$pkg_allowed" "$brief_forbidden"
+  if [ "$lvl" -le 2 ]; then
+    printf 'Validation: narrow -- %s; full -- %s; ShellCheck from CI: %s\n' "$vp_first_narrow" "$vp_first_full" "$vp_ci"
+  else
+    printf 'Validation: forgeos prompt lists the narrow and full plans.\n'
+  fi
+  if [ "$lvl" -eq 0 ]; then
+    printf 'Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.\n'
+  else
+    printf 'Economy: .ai/contract/economy.md section 4, the large-session protocol.\n'
+  fi
+  printf '\nDo not:\n\n%s\n' "$brief_do_not"
+  printf '\nReport: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.\n'
+  printf 'Stop after the local commit and report. Do not push.\n'
+}
 
-Do not:
-
-$dn
-
-Report: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.
-Stop after the local commit and report. Do not push.
-BRIEFEOF
-)"
-brief_bytes="$(printf '%s' "$brief_prompt" | wc -c | tr -d ' ')"
-brief_tokens=$(( (brief_bytes + 3) / 4 ))
-brief_within='false'
+# Climb the ladder until the WHOLE emitted text fits -- the notice is part of what is measured, so
+# the number the brief prints is the number it costs. The notice carries its own size, so its token
+# figure is settled by repeating the measurement until it stops changing (three passes are plenty).
+brief_level=0
+brief_bytes=0; brief_tokens=0; brief_within='false'; brief_overflow=0; brief_mandatory_overflow='false'
+while : ; do
+  brief_body_text="$(brief_body "$brief_level")"
+  brief_notes="$(brief_notes_for "$brief_level")"
+  brief_body_tokens=$(( ( $(printf '%s' "$brief_body_text" | wc -c | tr -d ' ') + 3) / 4 ))
+  brief_variant='fits'
+  if [ "$brief_level" -ge "$brief_max_level" ] && [ "$brief_body_tokens" -gt "$brief_max_tokens" ]; then
+    brief_variant='overflow'
+  fi
+  brief_tokens="$brief_body_tokens"
+  for _pass in 1 2 3; do
+    if [ "$brief_variant" = 'overflow' ]; then
+      brief_notice="Budget: ~$brief_tokens tokens of $brief_max_tokens (UTF-8 bytes / 4, an estimate) -- MANDATORY OVERFLOW by $(( brief_tokens - brief_max_tokens )). Every optional section was already dropped and nothing above was truncated."
+    elif [ -n "$brief_notes" ]; then
+      brief_notice="Budget: ~$brief_tokens tokens of $brief_max_tokens (UTF-8 bytes / 4, an estimate). Shortened to fit: $brief_notes."
+    else
+      brief_notice="Budget: ~$brief_tokens tokens of $brief_max_tokens (UTF-8 bytes / 4, an estimate)."
+    fi
+    brief_full="$brief_body_text
+$brief_notice"
+    brief_bytes="$(printf '%s' "$brief_full" | wc -c | tr -d ' ')"
+    brief_next=$(( (brief_bytes + 3) / 4 ))
+    [ "$brief_next" -eq "$brief_tokens" ] && break
+    brief_tokens="$brief_next"
+  done
+  if [ "$brief_tokens" -le "$brief_max_tokens" ] || [ "$brief_level" -ge "$brief_max_level" ]; then
+    brief_prompt="$brief_full"
+    break
+  fi
+  brief_level=$((brief_level + 1))
+done
 [ "$brief_tokens" -le "$brief_max_tokens" ] && brief_within='true'
+if [ "$brief_within" = 'false' ]; then
+  brief_overflow=$(( brief_tokens - brief_max_tokens ))
+  brief_mandatory_overflow='true'
+fi
+brief_shortened="$(brief_notes_for "$brief_level")"
 
 # --- output ---------------------------------------------------------------------------------------
 jesc() {   # minimal JSON string escaping: backslash, quote, and the control characters
@@ -1280,7 +1381,11 @@ BRIEFREFUSEEOF
     "estimatedTokens": $brief_tokens,
     "maxTokens": $brief_max_tokens,
     "withinBudget": $brief_within,
-    "method": "UTF-8 bytes / 4, rounded up"
+    "method": "UTF-8 bytes / 4, rounded up",
+    "reductionLevel": $brief_level,
+    "shortened": $(jnul "$brief_shortened"),
+    "mandatoryOverflow": $brief_mandatory_overflow,
+    "overflowTokens": $brief_overflow
   },
   "generatedPrompt": "$(jmul "$brief_prompt")",
   "safety": {

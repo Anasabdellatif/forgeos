@@ -35,7 +35,7 @@ This file contains cross-cutting constraints that apply to every task. Keep deta
 
 ## Prompt Prohibitions
 
-The `Do not:` list `forgeos next` / `forgeos prompt` writes into generated prompts. The entries below are generic; **add your own** — the repositories a slice must not touch, the environments it must not reach, the surfaces it must not start. Edit freely; read, never written. If this section is deleted, `forgeos next` falls back to a small built-in set. Two forms: `- when-not <regex>: text` and `- text`.
+The `Do not:` list `forgeos next` / `forgeos prompt` writes into generated prompts. The entries below are generic; **add your own** — the repositories a slice must not touch, the environments it must not reach, the surfaces it must not start. Edit freely; read, never written. If this section is deleted, `forgeos next` falls back to a small built-in set. Two forms: `- when-not <regex>: text` and `- text`. A bullet is a `-` followed by at least one space or tab; the text is what remains once surrounding spaces and tabs are trimmed. A `when-not` entry is left out only when the slice is about its subject, matched without regard to case. Anything that is not a bullet inside a `###` subsection -- prose, a heading, a bullet in another section -- is not a rule.
 
 ### Conditional
 

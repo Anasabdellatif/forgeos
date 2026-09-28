@@ -553,6 +553,513 @@ try {
     if ($legacyOut -match 'no Profile Compliance section') { $legacyOk++ }
     Assert-ExitCode -Case 'evidence: task without the section still closes with its note' -Expected 2 -Actual $legacyOk
 
+    # --- closure integrity: the archive must tell the truth about itself -------------------------
+    # Field evidence from three adopted projects: completed records still read `Status: active`, and
+    # one task whose Related plan line said "`docs/roadmap.md` section M-0" archived the project's
+    # ROADMAP as a plan. Both are fixed and pinned here. Fixtures are synthetic.
+    $closeSourceRepo = (Resolve-Path -LiteralPath (Join-Path $hookDir '..\..')).Path
+    function New-CloseFixture {
+        param([string]$Name)
+        $r = Join-Path $taskRoot $Name
+        foreach ($d in @('scripts\ai', '.ai\tasks\active', '.ai\tasks\completed', '.ai\plans\active', '.ai\plans\completed', 'docs')) {
+            New-Item -ItemType Directory -Path (Join-Path $r $d) -Force | Out-Null
+        }
+        Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'scripts\ai\finish-task.ps1') -Destination (Join-Path $r 'scripts\ai\finish-task.ps1') -Force
+        return $r
+    }
+    function New-CloseTask {
+        param([string]$Path, [string]$Plan, [string]$Results = 'observed')
+        $body = "# T`n`n## Metadata`n`n- Status: ``active```n- Updated: ``2026-01-01```n- Related plan: $Plan`n`n## Acceptance Criteria`n`n- [x] done -- passed: evidence`n`n## Completion Evidence`n`n- Results: $Results`n`n## Blocked`n`n- Status: ``no```n"
+        [System.IO.File]::WriteAllText($Path, $body, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    function New-ClosePlan {
+        param([string]$Path)
+        $body = "# P`n`n## Metadata`n`n- Status: ``active```n- Updated: ``2026-01-01```n- Related task: ``.ai/tasks/active/t1.md```n"
+        [System.IO.File]::WriteAllText($Path, $body, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    function Invoke-Close {
+        param([string]$Root, [string]$Task, [switch]$CheckOnly)
+        $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\ai\finish-task.ps1'), '-TaskPath', $Task)
+        if ($CheckOnly) { $argv += '-Check' }
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $text = (& powershell.exe @argv 2>&1 | Out-String)
+            return @{ Code = $LASTEXITCODE; Text = $text }
+        } finally { $ErrorActionPreference = $previous }
+    }
+
+    $cr = New-CloseFixture 'close-ok'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/active/p1.md` (slice 1)'
+    New-ClosePlan -Path (Join-Path $cr '.ai\plans\active\p1.md')
+    $null = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md')) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\completed\p1.md')) { $clOk++ }
+    $closedTask = @(Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md') -Encoding UTF8)
+    $closedPlan = @(Get-Content -LiteralPath (Join-Path $cr '.ai\plans\completed\p1.md') -Encoding UTF8)
+    if ($closedTask -ccontains '- Status: `completed`') { $clOk++ }
+    if ($closedTask -ccontains '- Related plan: `.ai/plans/completed/p1.md` (slice 1)') { $clOk++ }
+    if ($closedPlan -ccontains '- Status: `completed`') { $clOk++ }
+    if ($closedPlan -ccontains '- Related task: `.ai/tasks/completed/t1.md`') { $clOk++ }
+    # The Blocked section answers a different question and must be left alone.
+    if ($closedTask -ccontains '- Status: `no`') { $clOk++ }
+    Assert-ExitCode -Case 'closure: the archive says completed and the plan link points where the plan went' -Expected 7 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-roadmap'
+    [System.IO.File]::WriteAllText((Join-Path $cr 'docs\roadmap.md'), "# Roadmap`n`nnot a plan`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`docs/roadmap.md` section M-0'
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 2) { $clOk++ }
+    if ($res.Text -cmatch 'out-of-scope plan') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr 'docs\roadmap.md')) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    if (@(Get-ChildItem -LiteralPath (Join-Path $cr '.ai\plans\completed') -File).Count -eq 0) { $clOk++ }
+    if (@(Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md') -Encoding UTF8) -ccontains '- Status: `active`') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a related plan outside .ai/plans/ is refused and nothing moves' -Expected 6 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-shared'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/active/p1.md`'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t2.md') -Plan '`.ai/plans/active/p1.md`'
+    New-ClosePlan -Path (Join-Path $cr '.ai\plans\active\p1.md')
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 0) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md')) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')) { $clOk++ }
+    if ($res.Text -cmatch 'still named by 1 other active task') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a plan another active task still names stays active' -Expected 4 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-evidence'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`none`' -Results 'unknown'
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 2) { $clOk++ }
+    if ($res.Text -cmatch 'unobserved evidence') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    New-Item -ItemType Directory -Path (Join-Path $cr '.ai\memory\decisions') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\memory\decisions\waiver-ref.md'), "# A recorded decision`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t2.md') -Plan '`none`' -Results 'waived: scope=Results; reason=this repository ships no test suite; risk=regressions surface only in review; ref=.ai/memory/decisions/waiver-ref.md'
+    $res2 = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t2.md')
+    if ($res2.Code -eq 0) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\completed\t2.md')) { $clOk++ }
+    Assert-ExitCode -Case 'closure: unobserved evidence is refused and a written waiver closes' -Expected 5 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-check'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`none`'
+    $beforeHash = (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md') -CheckOnly
+    $clOk = 0
+    if ($res.Code -eq 0) { $clOk++ }
+    if ($beforeHash -eq (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    if ($res.Text -cmatch 'Would set Status to completed') { $clOk++ }
+    $null = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $repeat = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\completed\t1.md')
+    if ($repeat.Code -eq 0) { $clOk++ }
+    if ($repeat.Text -cmatch 'Already closed') { $clOk++ }
+    Assert-ExitCode -Case 'closure: --check writes nothing, and closing an already closed task is safe' -Expected 6 -Actual $clOk
+
+    # --- closure integrity, part two: containment, waivers, and what a failure leaves ------------
+    # Review findings against the first slice, each reproduced before it was fixed: a plan path that
+    # passed the `.ai/plans/` prefix test but RESOLVED to docs/roadmap.md; any file archived as a
+    # task; a bare `waived:` switching the evidence gate off; and a refusal that had already
+    # rewritten the record.
+    $cr = New-CloseFixture 'close-escape'
+    [System.IO.File]::WriteAllText((Join-Path $cr 'docs\roadmap.md'), "# Roadmap`n`nnot a plan`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/../../docs/roadmap.md`'
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 2) { $clOk++ }
+    if ($res.Text -cmatch 'resolves outside \.ai/plans/') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr 'docs\roadmap.md')) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    if (@(Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md') -Encoding UTF8) -ccontains '- Status: `active`') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a plan path that resolves outside .ai/plans/ is refused' -Expected 5 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-nontask'
+    [System.IO.File]::WriteAllText((Join-Path $cr 'docs\overview.md'), "# Overview`n`nnot a task`n", (New-Object System.Text.UTF8Encoding($false)))
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr 'docs\overview.md')
+    $clOk = 0
+    if ($res.Code -eq 1) { $clOk++ }
+    if ($res.Text -cmatch 'resolves outside \.ai/tasks/') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr 'docs\overview.md')) { $clOk++ }
+    if (@(Get-ChildItem -LiteralPath (Join-Path $cr '.ai\tasks\completed') -File).Count -eq 0) { $clOk++ }
+    Assert-ExitCode -Case 'closure: a file outside .ai/tasks/ is not archived as a task' -Expected 4 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-waiver'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`none`' -Results 'waived:'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t2.md') -Plan '`none`' -Results 'waived: pending'
+    New-Item -ItemType Directory -Path (Join-Path $cr '.ai\memory\decisions') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\memory\decisions\waiver-ref.md'), "# A recorded decision`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t3.md') -Plan '`none`' -Results 'waived: scope=Results; reason=this repository ships no test suite; risk=regressions surface only in review; ref=.ai/memory/decisions/waiver-ref.md'
+    $clOk = 0
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')).Code -eq 2) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t2.md')).Code -eq 2) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t3.md')).Code -eq 0) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\completed\t3.md')) { $clOk++ }
+    Assert-ExitCode -Case 'closure: a waiver must give a reason, and may not restate pending' -Expected 5 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-planopen'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/active/p1.md`'
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\plans\active\p1.md'), "# P`n`n## Metadata`n`n- Status: ``active```n- Updated: ``2026-01-01```n- Related task: ``.ai/tasks/active/t1.md```n`n## Steps`n`n- [ ] still open`n", (New-Object System.Text.UTF8Encoding($false)))
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 0) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')) { $clOk++ }
+    if ($res.Text -cmatch 'still has unchecked items') { $clOk++ }
+    # The link must still point at the plan where it actually is.
+    if (@(Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md') -Encoding UTF8) -ccontains '- Related plan: `.ai/plans/active/p1.md`') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a plan with unchecked items stays active and keeps its link' -Expected 4 -Actual $clOk
+
+    # A refusal must leave both records byte for byte. The destination is made unavailable by putting
+    # a DIRECTORY where the archived plan would go, which needs no permissions and no platform tricks.
+    $cr = New-CloseFixture 'close-failure'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/active/p1.md`'
+    New-ClosePlan -Path (Join-Path $cr '.ai\plans\active\p1.md')
+    New-Item -ItemType Directory -Path (Join-Path $cr '.ai\plans\completed\p1.md') -Force | Out-Null
+    $taskBefore = (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash
+    $planBefore = (Get-FileHash -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')).Hash
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 1) { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    if ($taskBefore -eq (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash) { $clOk++ }
+    if ($planBefore -eq (Get-FileHash -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')).Hash) { $clOk++ }
+    if (-not (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md') -PathType Leaf)) { $clOk++ }
+    Assert-ExitCode -Case 'closure: a refused closure leaves both records byte for byte' -Expected 5 -Actual $clOk
+
+    # --- closure integrity, part three: history, interruption, and bounded waivers ---------------
+    # Three gaps the review left open, each reproduced before it was closed: a shared plan archived
+    # later left completed records pointing at a path that no longer existed; a duplicate pair
+    # answered "already closed"; and a waiver needed nothing but length.
+    $cr = New-CloseFixture 'close-forward'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`.ai/plans/active/p1.md`'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t2.md') -Plan '`.ai/plans/active/p1.md`'
+    New-ClosePlan -Path (Join-Path $cr '.ai\plans\active\p1.md')
+    $null = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t2.md')
+    $clOk = 0
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\completed\p1.md')) { $clOk++ }
+    # The old path still resolves, so the first task's archived reference is not broken.
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')) { $clOk++ }
+    $fwdLines = @(Get-Content -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md') -Encoding UTF8)
+    if ($fwdLines -ccontains '- Status: `moved`') { $clOk++ }
+    if ($fwdLines -ccontains '- Now at: `.ai/plans/completed/p1.md`') { $clOk++ }
+    if (@(Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md') -Encoding UTF8) -ccontains '- Related plan: `.ai/plans/active/p1.md`') { $clOk++ }
+    if ($res.Text -cmatch 'forwarding record') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a shared plan leaves a forwarding record when it is finally archived' -Expected 6 -Actual $clOk
+
+    # A forwarding record is not a plan: nothing is archived from it, and it is not counted as work.
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t3.md') -Plan '`.ai/plans/active/p1.md`'
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t3.md')
+    $clOk = 0
+    if ($res.Code -eq 0) { $clOk++ }
+    if ($res.Text -cmatch 'is a forwarding record') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\active\p1.md')) { $clOk++ }
+    if (-not (Test-Path -LiteralPath (Join-Path $cr '.ai\plans\completed\p1.md.1'))) { $clOk++ }
+    New-Item -ItemType Directory -Path (Join-Path $cr 'scripts\command') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'scripts\command\project-status.ps1') -Destination (Join-Path $cr 'scripts\command\project-status.ps1') -Force
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\plans\active\still-open.md'), "# P`n`n- Status: ``active```n", (New-Object System.Text.UTF8Encoding($false)))
+    $statusPrev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $statusJson = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $cr 'scripts\command\project-status.ps1') -Json 2>$null | Out-String)
+    } finally { $ErrorActionPreference = $statusPrev }
+    if ($statusJson -cmatch '"plansActive":\s*1') { $clOk++ }
+    Assert-ExitCode -Case 'closure: a forwarding record is not a plan and is not counted as one' -Expected 5 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-interrupted'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`none`'
+    $twin = (Get-Content -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md') -Encoding UTF8) `
+        -replace '^- Status: `active`', '- Status: `completed`' -replace '^- Updated: `2026-01-01`', '- Updated: `2026-09-25`'
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\tasks\completed\t1.md'), (($twin -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $chk = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md') -CheckOnly
+    $clOk = 0
+    if ($chk.Code -eq 0) { $clOk++ }
+    if ($chk.Text -cmatch 'Interrupted closure') { $clOk++ }
+    if (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')) { $clOk++ }
+    $rec = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    if ($rec.Code -eq 0) { $clOk++ }
+    if ($rec.Text -cmatch 'Recovered an interrupted closure') { $clOk++ }
+    if (-not (Test-Path -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md'))) { $clOk++ }
+    $again = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\completed\t1.md')
+    if ($again.Text -cmatch 'Already closed') { $clOk++ }
+    Assert-ExitCode -Case 'closure: an interrupted closure is recovered, and repeating it is safe' -Expected 7 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-conflict'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\t1.md') -Plan '`none`'
+    Copy-Item -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md') -Destination (Join-Path $cr '.ai\tasks\completed\t1.md')
+    Add-Content -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md') -Value "`n## A section somebody added to the archive"
+    $taskBefore = (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash
+    $archiveBefore = (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md')).Hash
+    $res = Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\t1.md')
+    $clOk = 0
+    if ($res.Code -eq 2) { $clOk++ }
+    if ($res.Text -cmatch 'CONFLICT') { $clOk++ }
+    if ($taskBefore -eq (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\active\t1.md')).Hash) { $clOk++ }
+    if ($archiveBefore -eq (Get-FileHash -LiteralPath (Join-Path $cr '.ai\tasks\completed\t1.md')).Hash) { $clOk++ }
+    Assert-ExitCode -Case 'closure: two records with one name are a conflict, and neither is touched' -Expected 4 -Actual $clOk
+
+    $cr = New-CloseFixture 'close-waiver-shape'
+    New-Item -ItemType Directory -Path (Join-Path $cr '.ai\memory\decisions') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\memory\decisions\2026-01-01-no-suite.md'), "# A recorded decision`n", (New-Object System.Text.UTF8Encoding($false)))
+    $wOk = 'waived: scope=Results; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\good.md') -Plan '`none`' -Results $wOk
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\bare.md') -Plan '`none`' -Results 'waived:'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\noref.md') -Plan '`none`' -Results 'waived: scope=Results; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/absent.md'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\scope.md') -Plan '`none`' -Results 'waived: scope=Commands executed; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+    New-CloseTask -Path (Join-Path $cr '.ai\tasks\active\hidden.md') -Plan '`none`' -Results 'waived: scope=Results; reason=pending the nightly run; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+    $clOk = 0
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\good.md')).Code -eq 0) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\bare.md')).Code -eq 2) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\noref.md')).Code -eq 2) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\scope.md')).Code -eq 2) { $clOk++ }
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\hidden.md')).Code -eq 2) { $clOk++ }
+    # A waiver rescues nothing else: an unchecked criterion is still an unchecked criterion.
+    [System.IO.File]::WriteAllText((Join-Path $cr '.ai\tasks\active\crit.md'), "# T`n`n## Metadata`n`n- Status: ``active```n- Related plan: ``none```n`n## Acceptance Criteria`n`n- [ ] not done`n`n## Completion Evidence`n`n- Results: $wOk`n", (New-Object System.Text.UTF8Encoding($false)))
+    if ((Invoke-Close -Root $cr -Task (Join-Path $cr '.ai\tasks\active\crit.md')).Code -eq 2) { $clOk++ }
+    Assert-ExitCode -Case 'closure: a waiver must name scope, reason, risk, and a resolvable reference' -Expected 6 -Actual $clOk
+
+    # --- the brief pays its own budget -----------------------------------------------------------
+    # Before this, the brief measured itself, announced it was over, and printed everything anyway.
+    # It now drops OPTIONAL context whole, in a fixed order, and says what it dropped and where to
+    # find it. Mandatory content is never touched.
+    function New-BriefFixture {
+        param([string]$Name)
+        $r = Join-Path $taskRoot $Name
+        foreach ($d in @('scripts\command', 'scripts\lib', '.ai\context', '.ai\tasks\active', '.ai\tasks\inbox', 'docs')) {
+            New-Item -ItemType Directory -Path (Join-Path $r $d) -Force | Out-Null
+        }
+        Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'scripts\command\project-status.ps1') -Destination (Join-Path $r 'scripts\command\project-status.ps1') -Force
+        Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'scripts\lib\session-policy.json')    -Destination (Join-Path $r 'scripts\lib\session-policy.json') -Force
+        Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'templates\constraints-template.md')  -Destination (Join-Path $r '.ai\context\constraints.md') -Force
+        Copy-Item -LiteralPath (Join-Path $closeSourceRepo 'templates\governance-template.json') -Destination (Join-Path $r '.ai\context\governance.json') -Force
+        [System.IO.File]::WriteAllText((Join-Path $r '.ai\context\current-state.md'), "# Current State`n`n## Position`n`n- Now: building it`n- Next: the roadmap names it`n- Blocked by: none`n", (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText((Join-Path $r 'docs\roadmap.md'), "# Roadmap`n`n## M-1 - First capability`n`n| # | Criterion | Met when | Status |`n| --- | --- | --- | --- |`n| 1 | Harden the release workflow security | a test proves it | not built |`n", (New-Object System.Text.UTF8Encoding($false)))
+        return $r
+    }
+    function Invoke-Brief {
+        param([string]$Root, [switch]$AsJson)
+        $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-status.ps1'), '-Section', 'brief')
+        if ($AsJson) { $a += '-Json' }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $text = (& powershell.exe @a 2>$null | Out-String)
+            return @{ Code = $LASTEXITCODE; Text = $text }
+        } finally { $ErrorActionPreference = $prev }
+    }
+    function Get-BriefBudget {
+        param([string]$Root)
+        $res = Invoke-Brief -Root $Root -AsJson
+        try { return ($res.Text | ConvertFrom-Json).budget } catch { return $null }
+    }
+
+    # A plain project, no active task: nothing to shorten, and the brief says so by saying nothing.
+    $bfx = New-BriefFixture 'brief-fits'
+    $res = Invoke-Brief -Root $bfx
+    $bud = Get-BriefBudget -Root $bfx
+    $brOk = 0
+    if ($res.Code -eq 0) { $brOk++ }
+    if ($bud -and $bud.withinBudget -eq $true -and $bud.reductionLevel -eq 0 -and $bud.mandatoryOverflow -eq $false) { $brOk++ }
+    # Out-String hands back CRLF, so the end anchor must tolerate the carriage return.
+    # Out-String hands back CRLF, so the end anchor must tolerate the carriage return.
+    if ($res.Text -cmatch '(?m)^Budget: ~\d+ tokens of 800 \(UTF-8 bytes / 4, an estimate\)\.\s*$') { $brOk++ }
+    if ($res.Text -cmatch 'Economy: large-session protocol') { $brOk++ }
+    Assert-ExitCode -Case 'brief: a project inside its budget is printed whole' -Expected 4 -Actual $brOk
+
+    # A long Arabic capability, a long ledger line, six inbox alternatives: the ladder has to work.
+    $bfx = New-BriefFixture 'brief-long'
+    $arNow = [string][char]0x0625 + [char]0x0639 + [char]0x0627 + [char]0x062F + [char]0x0629 + ' ' + [char]0x0628 + [char]0x0646 + [char]0x0627 + [char]0x0621 + ' ' + [char]0x0637 + [char]0x0628 + [char]0x0642 + [char]0x0629 + ' ' + [char]0x0627 + [char]0x0644 + [char]0x0625 + [char]0x0628 + [char]0x0637 + [char]0x0627 + [char]0x0644 + ' ' + [char]0x0645 + [char]0x0639 + ' ' + [char]0x062A + [char]0x062A + [char]0x0628 + [char]0x0639 + ' ' + [char]0x0643 + [char]0x0627 + [char]0x0645 + [char]0x0644 + ' ' + [char]0x0644 + [char]0x0644 + [char]0x0631 + [char]0x0633 + [char]0x0627 + [char]0x0626 + [char]0x0644 + ' ' + [char]0x0648 + [char]0x062A + [char]0x0646 + [char]0x0628 + [char]0x064A + [char]0x0647 + [char]0x0627 + [char]0x062A + ' ' + [char]0x0627 + [char]0x0644 + [char]0x0641 + [char]0x0634 + [char]0x0644
+    [System.IO.File]::WriteAllText((Join-Path $bfx '.ai\context\current-state.md'), "# Current State`n`n## Position`n`n- Now: $arNow`n- Next: x`n- Blocked by: $arNow`n", (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText((Join-Path $bfx 'docs\roadmap.md'), "# Roadmap`n`n## M-1 - c`n`n| # | Criterion | Met when | Status |`n| --- | --- | --- | --- |`n| 1 | $arNow $arNow | a test proves it | partial |`n", (New-Object System.Text.UTF8Encoding($false)))
+    foreach ($i in 1..6) {
+        [System.IO.File]::WriteAllText((Join-Path $bfx ".ai\tasks\inbox\2026-09-2$i-$arNow-$i.md"), "# Task $i`n`n- Status: ``inbox```n", (New-Object System.Text.UTF8Encoding($false)))
+    }
+    [System.IO.File]::WriteAllText((Join-Path $bfx ".ai\tasks\active\2026-09-25-$arNow.md"), "# Task`n`n- Status: ``active```n", (New-Object System.Text.UTF8Encoding($false)))
+    $res = Invoke-Brief -Root $bfx
+    $bud = Get-BriefBudget -Root $bfx
+    $brOk = 0
+    if ($bud -and $bud.withinBudget -eq $true -and $bud.reductionLevel -gt 0 -and $bud.estimatedTokens -le 800) { $brOk++ }
+    if ($res.Text -cmatch 'Shortened to fit:') { $brOk++ }
+    if ($res.Text -cmatch '\.ai/contract/economy\.md section 4') { $brOk++ }
+    if ($res.Text -cmatch ([regex]::Escape($arNow.Substring(0, 6)))) { $brOk++ }
+    Assert-ExitCode -Case 'brief: a long project is shortened to fit and says what it dropped' -Expected 4 -Actual $brOk
+
+    # Mandatory content alone over budget: printed whole, and reported as overflow rather than "fits".
+    $bfx = New-BriefFixture 'brief-overflow'
+    $arRule = [string][char]0x0644 + [char]0x0627 + ' ' + [char]0x062A + [char]0x0641 + [char]0x0639 + [char]0x0644 + ' ' + [char]0x0634 + [char]0x064A + [char]0x0626 + [char]0x0627 + ' ' + [char]0x0645 + [char]0x0646 + ' ' + [char]0x0647 + [char]0x0630 + [char]0x0647
+    $rules = New-Object System.Collections.Generic.List[string]
+    $rules.Add('# Project Constraints'); $rules.Add(''); $rules.Add('## Prompt Prohibitions'); $rules.Add(''); $rules.Add('### Always'); $rules.Add('')
+    foreach ($i in 1..40) { $rules.Add("- $arRule $i " + ('x' * 40)) }
+    [System.IO.File]::WriteAllText((Join-Path $bfx '.ai\context\constraints.md'), (($rules -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $res = Invoke-Brief -Root $bfx
+    $bud = Get-BriefBudget -Root $bfx
+    $brOk = 0
+    if ($bud -and $bud.withinBudget -eq $false -and $bud.mandatoryOverflow -eq $true -and $bud.overflowTokens -gt 0) { $brOk++ }
+    if ($res.Text -cmatch 'MANDATORY OVERFLOW') { $brOk++ }
+    if (@([regex]::Matches($res.Text, [regex]::Escape($arRule))).Count -ge 40) { $brOk++ }
+    if ($res.Text -cmatch 'Execution: single-agent only') { $brOk++ }
+    if ($res.Text -cmatch 'Stop after the local commit and report\. Do not push\.') { $brOk++ }
+    Assert-ExitCode -Case 'brief: mandatory content over budget is printed whole and reported' -Expected 5 -Actual $brOk
+
+    # Shortening must never cost a rule, an identifier, a usable path, or the blocked verdict.
+    $bfx = New-BriefFixture 'brief-safety'
+    [System.IO.File]::WriteAllText((Join-Path $bfx '.ai\context\current-state.md'), "# Current State`n`n## Position`n`n- Now: $arNow $arNow`n- Next: x`n- Blocked by: $arNow`n", (New-Object System.Text.UTF8Encoding($false)))
+    foreach ($i in 1..8) {
+        [System.IO.File]::WriteAllText((Join-Path $bfx ".ai\tasks\inbox\2026-09-1$i-$arNow-$i.md"), "# T$i`n`n- Status: ``inbox```n", (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $res = Invoke-Brief -Root $bfx
+    $brOk = 0
+    if ($res.Text -cmatch 'Execution: single-agent only') { $brOk++ }
+    if ($res.Text -cmatch '(?m)^Repository: .* HEAD .* version ') { $brOk++ }
+    if ($res.Text -cmatch '(?m)^Capability: ') { $brOk++ }
+    if ($res.Text -cmatch '(?m)^Blocked: ') { $brOk++ }
+    if ($res.Text -cmatch '(?m)^Read first: .*\.ai/context/current-state\.md') { $brOk++ }
+    if ($res.Text -cmatch 'Do not:') { $brOk++ }
+    Assert-ExitCode -Case 'brief: shortening never drops a rule, an identity, or the blocked verdict' -Expected 6 -Actual $brOk
+
+    # Deterministic, and it writes nothing: the same project renders the same bytes twice.
+    $bfx = New-BriefFixture 'brief-deterministic'
+    $before = ((@(Get-ChildItem -LiteralPath $bfx -Recurse -File | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
+    $one = (Invoke-Brief -Root $bfx).Text
+    $two = (Invoke-Brief -Root $bfx).Text
+    $after = ((@(Get-ChildItem -LiteralPath $bfx -Recurse -File | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
+    $bud = Get-BriefBudget -Root $bfx
+    $brOk = 0
+    if ($one -ceq $two) { $brOk++ }
+    if ($before -ceq $after) { $brOk++ }
+    if ($one.Length -gt 0) { $brOk++ }
+    if ($bud -and $bud.bytes -gt 0 -and $bud.estimatedTokens -eq [int][math]::Ceiling($bud.bytes / 4)) { $brOk++ }
+    Assert-ExitCode -Case 'brief: the same project renders the same brief, and the figure matches the text' -Expected 4 -Actual $brOk
+
+    # --- mandatory rules: one contract, and the same list in both shells --------------------------
+    # A prohibition that reaches one shell's reader and not the other's is a guardrail that depends
+    # on which machine ran the command. These cases assert the rules themselves -- text and order --
+    # from a known fixture, so a parser that drifts is caught by its output, not by a matching name.
+    function Get-StatusText {
+        param([string]$Root, [string]$Section, [switch]$AsJson)
+        $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-status.ps1'), '-Section', $Section)
+        if ($AsJson) { $a += '-Json' }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { return (& powershell.exe @a 2>$null | Out-String) } finally { $ErrorActionPreference = $prev }
+    }
+    function Get-RuleLines {
+        param([string]$Root, [string]$Section)
+        $found = New-Object System.Collections.Generic.List[string]
+        $on = $false
+        foreach ($l in ((Get-StatusText -Root $Root -Section $Section) -split "`r?`n")) {
+            if (-not $on) { if ($l -ceq 'Do not:') { $on = $true }; continue }
+            if ($l -cmatch '^Report:' -or $l -cmatch '^Final report') { break }
+            if ($l.Trim().Length -gt 0) { $found.Add($l) }
+        }
+        return ($found -join "`n")
+    }
+    function Get-RuleJson {
+        param([string]$Root)
+        try { return (@((Get-StatusText -Root $Root -Section brief -AsJson | ConvertFrom-Json).doNot) -join "`n") }
+        catch { return '<unreadable>' }
+    }
+    function Write-Fixture {
+        param([string]$Path, [string]$Text)
+        [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    }
+
+    # A '-' and any run of spaces or tabs is the bullet the author meant. Requiring exactly "- "
+    # cost a rule: a tab-indented prohibition was dropped on POSIX and emitted here, silently.
+    $rfx = New-BriefFixture 'rules-bullets'
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n### Always`n`n" +
+        "- one space after the dash`n-  two spaces after the dash`n-`ta tab after the dash`n- trailing padding is trimmed   `n")
+    $rExpected = @('one space after the dash', 'two spaces after the dash', 'a tab after the dash', 'trailing padding is trimmed') -join "`n"
+    $rExpectedPrompt = (($rExpected -split "`n") | ForEach-Object { '- ' + $_ }) -join "`n"
+    $rOk = 0
+    if ((Get-RuleLines -Root $rfx -Section brief)  -ceq $rExpected)       { $rOk++ }
+    if ((Get-RuleLines -Root $rfx -Section prompt) -ceq $rExpectedPrompt) { $rOk++ }
+    if ((Get-RuleJson  -Root $rfx)                 -ceq $rExpected)       { $rOk++ }
+    Assert-ExitCode -Case 'rules: a tab or padding around a bullet never costs a rule' -Expected 3 -Actual $rOk
+
+    # Only bullets inside a ### subsection are rules. The prose above the first one explains the
+    # format with bullets of its own, and emitting those turned documentation into prohibitions.
+    $rfx = New-BriefFixture 'rules-structure'
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n" +
+        "Prose explaining the format, with bullets of its own:`n`n" +
+        "- when-not ``prose``: documentation, never a rule`n- prose, never a rule`n`n" +
+        "### Always`n`n- a real rule`n-no space after the dash`n  - an indented bullet`nnot a bullet at all`n`n" +
+        "#### A deeper heading`n`n- a rule under a deeper heading`n`n## Another Section`n`n- outside the section`n")
+    $rExpected = @('a real rule', 'a rule under a deeper heading') -join "`n"
+    $rExpectedPrompt = (($rExpected -split "`n") | ForEach-Object { '- ' + $_ }) -join "`n"
+    $rGot = Get-RuleLines -Root $rfx -Section brief
+    $rOk = 0
+    if ($rGot -ceq $rExpected) { $rOk++ }
+    if ((Get-RuleLines -Root $rfx -Section prompt) -ceq $rExpectedPrompt) { $rOk++ }
+    if ($rGot -cnotmatch 'never a rule')        { $rOk++ }
+    if ($rGot -cnotmatch 'outside the section') { $rOk++ }
+    Assert-ExitCode -Case 'rules: headings and prose bullets are never emitted as rules' -Expected 4 -Actual $rOk
+
+    # when-not drops its rule only when the slice is about that subject, and the author's
+    # capitalization is not part of the question: the subject is matched case-insensitively.
+    $rfx = New-BriefFixture 'rules-conditional'
+    Write-Fixture (Join-Path $rfx 'docs\roadmap.md') ("# Roadmap`n`n## M-4 - Billing engine`n`n" +
+        "| # | Criterion | Met when | Status |`n| --- | --- | --- | --- |`n| 1 | Build it | a test proves it | not built |`n")
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n### Conditional`n`n" +
+        "- when-not ``billing``: dropped, the slice is about billing`n" +
+        "- when-not ``BILLING``: dropped too, capitalization is not the question`n" +
+        "- when-not ``payments``: kept, the slice is not about payments`n" +
+        "- when-not ``empty``:`n`n### Always`n`n- kept whatever the slice is about`n")
+    $rExpected = @('kept, the slice is not about payments', 'when-not `empty`:', 'kept whatever the slice is about') -join "`n"
+    $rGot = Get-RuleLines -Root $rfx -Section brief
+    $rOk = 0
+    if ($rGot -ceq $rExpected) { $rOk++ }
+    if ($rGot -cnotmatch 'about billing') { $rOk++ }
+    if ((Get-RuleJson -Root $rfx) -ceq $rExpected) { $rOk++ }
+    Assert-ExitCode -Case 'rules: a conditional rule is dropped only when the subject matches it' -Expected 3 -Actual $rOk
+
+    # The separators inside a when-not entry are runs of spaces or tabs, like the bullet marker. A
+    # tab after `when-not`, a doubled space, or a colon with nothing after it used to send a
+    # well-formed rule down the malformed path on POSIX: it printed verbatim, condition unapplied.
+    $rfx = New-BriefFixture 'rules-separators'
+    Write-Fixture (Join-Path $rfx 'docs\roadmap.md') ("# Roadmap`n`n## M-4 - Billing engine`n`n" +
+        "| # | Criterion | Met when | Status |`n| --- | --- | --- | --- |`n| 1 | Build it | a test proves it | not built |`n")
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n### Conditional`n`n" +
+        "- when-not`t``billing``: a tab after when-not`n" +
+        "- when-not  ``billing``: two spaces after when-not`n" +
+        "- when-not ``billing``:no space after the colon`n" +
+        "- when-not ``payments``:   a padded colon, and no match`n`n### Always`n`n- always kept`n")
+    $rExpected = @('a padded colon, and no match', 'always kept') -join "`n"
+    $rExpectedPrompt = (($rExpected -split "`n") | ForEach-Object { '- ' + $_ }) -join "`n"
+    $rGot = Get-RuleLines -Root $rfx -Section brief
+    $rOk = 0
+    if ($rGot -ceq $rExpected) { $rOk++ }
+    if ((Get-RuleLines -Root $rfx -Section prompt) -ceq $rExpectedPrompt) { $rOk++ }
+    if ($rGot -cnotmatch 'when-not') { $rOk++ }
+    if ((Get-RuleJson -Root $rfx) -ceq $rExpected) { $rOk++ }
+    Assert-ExitCode -Case 'rules: a tab or padding inside when-not still applies the condition' -Expected 4 -Actual $rOk
+
+    # The brief, the session package, and the JSON are three renderings of one list. Multibyte text,
+    # backticks, paths, and internal punctuation travel through all three unchanged, and rendering
+    # writes nothing.
+    $rfx = New-BriefFixture 'rules-renderings'
+    $arRuleText = -join (@(0x0644,0x0627,0x20,0x062A,0x062F,0x0641,0x0639,0x20,0x0625,0x0644,0x0649,0x20,0x0627,0x0644,0x0645,0x0633,0x062A,0x0648,0x062F,0x0639,0x20,0x0627,0x0644,0x0639,0x0627,0x0645) | ForEach-Object { [char]$_ })
+    $rRules = @($arRuleText, 'never touch `scripts/lib/blueprint-manifest.json` or docs/design/', 'a rule with: a colon, "quotes", and 50% of a sign')
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n### Always`n`n" +
+        ((($rRules | ForEach-Object { '- ' + $_ }) -join "`n") + "`n"))
+    $rExpected = ($rRules -join "`n")
+    $rExpectedPrompt = (($rRules | ForEach-Object { '- ' + $_ }) -join "`n")
+    $rBefore = ((@(Get-ChildItem -LiteralPath $rfx -Recurse -File | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
+    $rGot = Get-RuleLines -Root $rfx -Section brief
+    $rGotPrompt = Get-RuleLines -Root $rfx -Section prompt
+    $rAfter = ((@(Get-ChildItem -LiteralPath $rfx -Recurse -File | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
+    $rOk = 0
+    if ($rGot -ceq $rExpected) { $rOk++ }
+    if ($rGotPrompt -ceq $rExpectedPrompt) { $rOk++ }
+    if ((Get-RuleJson -Root $rfx) -ceq $rExpected) { $rOk++ }
+    if ($rBefore -ceq $rAfter) { $rOk++ }
+    Assert-ExitCode -Case 'rules: the brief, the package, and the JSON carry the same list unchanged' -Expected 4 -Actual $rOk
+
     # --- promoted roles: structured, and the prose form still honoured ---------------------------
     # content-site does not require security-reviewer. Only a promotion makes it enforceable, so
     # these cases fail the moment the promotion stops being read.

@@ -46,26 +46,106 @@ function Resolve-RepositoryPath {
     return $resolved.Path
 }
 
-function Get-RelatedPlanPath {
+# CONTAINMENT. A path may reach outside its permitted root through `..` or through a link, so the
+# RESOLVED target is what gets checked, never the text. GetFullPath collapses traversal; the reparse
+# walk catches a junction or symlink planted inside the root, which Windows PowerShell 5.1 cannot
+# resolve on its own. Returns the resolved path, or an empty string when it escapes.
+function Resolve-ContainedPath {
+    param([string]$Path, [string]$Root)
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path)
+        $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    } catch { return '' }
+    if (-not $full.StartsWith($rootFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
+    # Walk from the root down to the file: a reparse point anywhere on the way can leave the root.
+    $cursor = Split-Path -Path $full -Parent
+    while ($cursor -and $cursor.Length -ge $rootFull.Length) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+            if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return '' }
+        }
+        $parent = Split-Path -Path $cursor -Parent
+        if ($parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        $leafItem = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+        if ($leafItem -and ($leafItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return '' }
+    }
+    return $full
+}
+
+# A task names its plan in ONE metadata line; everything else on that line is prose. The rules: one
+# line only, `none` (with or without an explanation after it) means no plan, a path is the single
+# backticked token, and it must live under .ai/plans/. Anything ambiguous refuses instead of
+# guessing. The defect this replaces: a line reading "Related plan: `docs/roadmap.md` section M-0"
+# resolved to the project's roadmap, and closing that task archived the ROADMAP as a plan.
+function Resolve-RelatedPlan {
     param(
-        [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$Content
+        # No Mandatory here: a task file's blank lines arrive as empty strings, and a mandatory
+        # [string[]] rejects an empty element before the function ever runs.
+        [string]$RepoRoot,
+        [AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines
     )
 
-    $match = [regex]::Match($Content, '(?m)^\s*-\s*Related plan:\s*`?([^`\r\n]+)`?\s*$')
-    if (-not $match.Success) {
-        return $null
+    $result = @{ Relative = ''; Resolved = ''; Blocker = ''; Note = '' }
+    $planLines = @($Lines | Where-Object { $_ -match '^\s*-\s*Related plan:' })
+    if ($planLines.Count -eq 0) { return $result }
+    if ($planLines.Count -gt 1) {
+        $result.Blocker = "ambiguous related plan  $($planLines.Count) 'Related plan:' lines; exactly one is allowed"
+        return $result
     }
 
-    $value = $match.Groups[1].Value.Trim()
-    if ($value -eq 'none' -or $value -eq '[path or none]') {
-        return $null
+    $value = ($planLines[0] -replace '^[^:]*:\s*', '').Trim()
+    $lower = ($value -replace '`', '').ToLowerInvariant()
+    if ($lower -eq '[path or none]' -or $lower -eq 'none' -or $lower -match '^none[^a-z0-9]') { return $result }
+
+    $ticks = ([regex]::Matches($value, '`')).Count
+    $reference = ''
+    if ($ticks -ge 4) {
+        $result.Blocker = 'ambiguous related plan  more than one quoted path on the line'
+        return $result
+    } elseif ($ticks -ge 2) {
+        $reference = [regex]::Match($value, '`([^`]+)`').Groups[1].Value.Trim()
+    } else {
+        $candidate = ($value -split '\s+')[0]
+        if ($candidate -like '*.md') {
+            $reference = $candidate
+        } else {
+            $result.Note = 'the Related plan line is prose, not a path; no plan was archived'
+            return $result
+        }
     }
 
-    if ([System.IO.Path]::IsPathRooted($value)) {
-        return $value
+    $relative = $reference -replace '\\', '/'
+    $rootForward = ($RepoRoot -replace '\\', '/').TrimEnd('/')
+    if ($relative.StartsWith($rootForward + '/')) {
+        $relative = $relative.Substring($rootForward.Length + 1)
+    } elseif ([System.IO.Path]::IsPathRooted($relative)) {
+        $relative = ''
     }
-    return Join-Path -Path $RepoRoot -ChildPath $value
+    if ($relative.StartsWith('./')) { $relative = $relative.Substring(2) }
+
+    if (-not $relative.StartsWith('.ai/plans/')) {
+        $result.Blocker = "out-of-scope plan       '$reference' is not under .ai/plans/; refusing to archive it"
+        return $result
+    }
+
+    # The prefix above is the text. This is the fact: `.ai/plans/../../docs/roadmap.md` passes any
+    # prefix test and IS the roadmap.
+    $candidate = Join-Path -Path $RepoRoot -ChildPath ($relative -replace '/', '\')
+    $plansRoot = Join-Path -Path $RepoRoot -ChildPath '.ai\plans'
+    $contained = Resolve-ContainedPath -Path $candidate -Root $plansRoot
+    if (-not $contained) {
+        $escaped = $candidate
+        try { $escaped = [System.IO.Path]::GetFullPath($candidate) } catch { }
+        $result.Blocker = "out-of-scope plan       '$reference' resolves outside .ai/plans/ -> $escaped"
+        return $result
+    }
+
+    $result.Relative = $relative
+    $result.Resolved = $contained
+    return $result
 }
 
 $repoRoot = Get-RepositoryRoot
@@ -80,6 +160,81 @@ try {
 if (-not (Test-Path -LiteralPath $resolvedTask -PathType Leaf)) {
     Write-Error "Task not found: $resolvedTask"
     exit 1
+}
+
+# CONTAINMENT, before anything else reads the file: a file that is not a task must never be
+# archived as one, and `..` or a link must not reach out of .ai/tasks/.
+$tasksRoot = Join-Path -Path $repoRoot -ChildPath '.ai\tasks'
+$containedTask = Resolve-ContainedPath -Path $resolvedTask -Root $tasksRoot
+if (-not $containedTask) {
+    $shownTask = $resolvedTask
+    try { $shownTask = [System.IO.Path]::GetFullPath($resolvedTask) } catch { }
+    [Console]::Error.WriteLine("Refusing: the task resolves outside .ai/tasks/ -> $shownTask")
+    [Console]::Error.WriteLine('Only a record inside .ai/tasks/ can be closed.')
+    exit 1
+}
+$resolvedTask = $containedTask
+
+# A record can exist in BOTH active/ and completed/ when a closure was interrupted between writing
+# the archive and removing the original. That is not "already closed", and it is not a plain refusal
+# either: it is one of two states, told apart by content, never by filename.
+#
+#   recoverable  the archive is this record plus exactly the changes a closure makes
+#   conflicting  anything else -- someone edited a copy, or they are different records
+function Get-NormalizedRecord {
+    param([string]$Path)
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $ds = $false; $du = $false; $dp = $false; $gate = $false
+    $out = foreach ($line in $lines) {
+        if ($line -match '^##\s+Discovery Gate Note\s*$') { $gate = $true }
+        if ($gate) { continue }
+        if (-not $ds -and $line -match '^\s*-\s*Status:') { $ds = $true; '- Status: <closure>' }
+        elseif (-not $du -and $line -match '^\s*-\s*Updated:') { $du = $true; '- Updated: <closure>' }
+        elseif (-not $dp -and $line -match '^\s*-\s*Related plan:') { $dp = $true; '- Related plan: <closure>' }
+        else { $line }
+    }
+    return ($out -join "`n")
+}
+
+$taskLeaf = Split-Path -Path $resolvedTask -Leaf
+$activeTwin = Join-Path -Path $repoRoot -ChildPath (".ai\tasks\active\" + $taskLeaf)
+$archivedTwin = Join-Path -Path $repoRoot -ChildPath (".ai\tasks\completed\" + $taskLeaf)
+
+if ((Test-Path -LiteralPath $activeTwin -PathType Leaf) -and (Test-Path -LiteralPath $archivedTwin -PathType Leaf)) {
+    if ((Get-NormalizedRecord -Path $activeTwin) -ceq (Get-NormalizedRecord -Path $archivedTwin)) {
+        if ($Check) {
+            Write-Output "Interrupted closure: $(($activeTwin -replace [regex]::Escape($repoRoot + '\'), '') -replace '\\', '/') and its archive are the same record."
+            Write-Output 'Running without -Check would remove the active copy and finish the closure.'
+            Write-Output 'Nothing was moved or edited (-Check).'
+            exit 0
+        }
+        try {
+            Remove-Item -LiteralPath $activeTwin -Force -ErrorAction Stop
+        } catch {
+            [Console]::Error.WriteLine("Could not remove $activeTwin; both copies remain.")
+            exit 1
+        }
+        Write-Output "Recovered an interrupted closure: removed $(($activeTwin -replace [regex]::Escape($repoRoot + '\'), '') -replace '\\', '/')"
+        Write-Output "The archive at $(($archivedTwin -replace [regex]::Escape($repoRoot + '\'), '') -replace '\\', '/') was already complete and was not touched."
+        exit 0
+    }
+    [Console]::Error.WriteLine("CONFLICT: two different records share the name $taskLeaf.")
+    [Console]::Error.WriteLine("  active:   $(($activeTwin -replace [regex]::Escape($repoRoot + '\'), '') -replace '\\', '/')")
+    [Console]::Error.WriteLine("  archived: $(($archivedTwin -replace [regex]::Escape($repoRoot + '\'), '') -replace '\\', '/')")
+    [Console]::Error.WriteLine('They differ by more than a closure would change, so neither was touched.')
+    [Console]::Error.WriteLine('Compare them yourself, keep the one that is right, and remove the other.')
+    exit 2
+}
+
+# Closing something already closed is a repeat, not an error: an interrupted session reruns the same
+# command, and the archive must not be touched for it.
+if (($resolvedTask -replace '\\', '/') -match '/\.ai/tasks/completed/') {
+    $shown = ($resolvedTask -replace '\\', '/')
+    $rootForward = ($repoRoot -replace '\\', '/').TrimEnd('/')
+    if ($shown.StartsWith($rootForward + '/')) { $shown = $shown.Substring($rootForward.Length + 1) }
+    Write-Output "Already closed: $shown"
+    Write-Output 'Nothing to do. The archive was not touched.'
+    exit 0
 }
 
 # -Encoding UTF8 is load-bearing on Windows PowerShell 5.1: without it a BOM-less UTF-8 file --
@@ -263,11 +418,79 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     }
 }
 
+# Gate 6 -- validation evidence must be observed. Pending or unknown is not success.
+# The archive is read later as proof that something ran; a field reading "unknown" or "not run" is
+# proof of nothing. It must carry a result, or be waived deliberately and in writing.
+$evidenceSection = $false
+foreach ($line in $taskLines) {
+    if ($line -match '^##\s+Completion Evidence') { $evidenceSection = $true; continue }
+    if ($line -match '^##\s') { $evidenceSection = $false }
+    if (-not $evidenceSection) { continue }
+    if ($line -match '^\s*-\s*(Commands executed|Results|Final diff reviewed)\s*:(.*)$') {
+        $field = $Matches[1]
+        $value = ($Matches[2] -replace '`', '').Trim().ToLowerInvariant()
+        # A waiver is an exception someone wrote down, not a word that switches the gate off. It
+        # must say WHY, in its own words. Text cannot authenticate who allowed it, and this script
+        # never claims to: it checks that a human sentence is there to review.
+        if ($value -like 'waived:*') {
+            # The contract's "a check that could not be run is documented with the reason and the
+            # residual risk" (lifecycle.md section 6), in a shape a script can check:
+            #   waived: scope=<this field>; reason=<why>; risk=<what may bite>; ref=<a file here>
+            # Structure and resolution are verified. Authorship is not: this cannot authenticate who
+            # allowed the exception, and it cannot prove a command ran. A waiver covers its own field.
+            $body = $value.Substring('waived:'.Length).Trim()
+            $wScope = ''; $wReason = ''; $wRisk = ''; $wRef = ''
+            foreach ($part in ($body -split ';')) {
+                if ($part -notmatch '=') { continue }
+                $key = ($part -split '=', 2)[0].Trim().ToLowerInvariant()
+                $val = ($part -split '=', 2)[1].Trim()
+                switch ($key) {
+                    'scope'  { $wScope = $val }
+                    'reason' { $wReason = $val }
+                    'risk'   { $wRisk = $val }
+                    'ref'    { $wRef = $val }
+                }
+            }
+            $fieldName = $field.ToLowerInvariant()
+            if (-not $wScope -or -not $wReason -or -not $wRisk -or -not $wRef) {
+                $blockers.Add("waiver is malformed    ${field}: expected 'waived: scope=...; reason=...; risk=...; ref=...'")
+            } elseif ($wScope.ToLowerInvariant() -ne $fieldName) {
+                $blockers.Add("waiver scope mismatch  ${field}: the waiver names scope '$wScope', not this field")
+            } elseif ($wReason.Length -lt 12) {
+                $blockers.Add("waiver without a reason ${field}: the reason must say why, in at least 12 characters")
+            } elseif ($wRisk.Length -lt 6) {
+                $blockers.Add("waiver without a risk  ${field}: the residual risk must be stated")
+            } elseif ($wReason -match '^(pending|unknown|tbd|todo|later|not run|not yet|n/a)') {
+                $blockers.Add("waiver restates pending ${field}: '$wReason' is pending evidence wearing a waiver")
+            } else {
+                $refCandidate = Join-Path -Path $repoRoot -ChildPath ($wRef -replace '/', '\')
+                $refContained = Resolve-ContainedPath -Path $refCandidate -Root $repoRoot
+                if (-not $refContained) {
+                    $blockers.Add("waiver reference escapes ${field}: ref '$wRef' resolves outside the repository")
+                } elseif (-not (Test-Path -LiteralPath $refContained -PathType Leaf)) {
+                    $blockers.Add("waiver reference missing ${field}: ref '$wRef' does not resolve to a file in this repository")
+                }
+            }
+            continue
+        }
+        if ($value -in @('', 'unknown', 'not run', 'not yet', 'none', 'n/a', 'tbd', 'pending', 'no')) {
+            $blockers.Add("unobserved evidence   ${field}: '$value' is not an observed result")
+        }
+    }
+}
+
+# The related plan, resolved structurally. A refusal here is a blocker like any other, so the task
+# is reported unready and NOTHING is moved or edited.
+$planResolution = Resolve-RelatedPlan -RepoRoot $repoRoot -Lines $taskLines
+if ($planResolution.Blocker) { $blockers.Add($planResolution.Blocker) }
+$planNote = $planResolution.Note
+
 if ($blockers.Count -gt 0) {
     Write-Output "Task is NOT ready to close: $resolvedTask"
     Write-Output ''
     $blockers | ForEach-Object { Write-Output "  - $_" }
     Write-Output ''
+    Write-Output 'Nothing was moved and nothing was edited.'
     Write-Output 'Fix these, or keep the task active and record the blocker honestly.'
     Write-Output 'See .ai/contract/lifecycle.md section 6 for the full Definition of Done.'
     exit 2
@@ -276,11 +499,6 @@ if ($blockers.Count -gt 0) {
 # --- Discovery awareness: records, never blocks -------------------------------------------------
 # new-task refuses to OPEN an active task while the project is undefined. Closing is different:
 # .ai/contract/discovery.md section 1 forbids starting work, not finishing work already started.
-# Blocking closure here would strand every task the override legitimately created, and would push
-# people to archive by hand -- which destroys the record this directory exists to keep.
-#
-# So closure proceeds, and the circumstance is written down. The rule about what counts as
-# "undefined" is not restated here; check-placeholders is asked, exactly as new-task asks it.
 $gateBlocking = 0
 $gateChecker = Join-Path -Path $repoRoot -ChildPath 'scripts\validation\check-placeholders.ps1'
 if (Test-Path -LiteralPath $gateChecker -PathType Leaf) {
@@ -298,6 +516,76 @@ if (Test-Path -LiteralPath $gateChecker -PathType Leaf) {
 $hasOverride = $taskContent -match '(?m)^##\s+Discovery Gate Override\s*$'
 $needsGateNote = ($gateBlocking -ne 0) -and (-not $hasOverride)
 
+# Where each record is going, decided before anything moves. A plan that is missing, or that another
+# active task still names, is reported rather than archived: one task's closure does not retire a
+# plan its siblings are still working from.
+$planFull = ''
+if ($planResolution.Relative) {
+    $candidate = $planResolution.Resolved
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        $planNote = "the related plan $($planResolution.Relative) does not exist, so nothing was archived for it"
+    } else {
+        $planLeaf = Split-Path -Path $candidate -Leaf
+        $activeDir = Join-Path -Path $repoRoot -ChildPath '.ai\tasks\active'
+        $shared = 0
+        if (Test-Path -LiteralPath $activeDir -PathType Container) {
+            foreach ($other in @(Get-ChildItem -LiteralPath $activeDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+                # By leaf, not by full path: the same file can arrive as a short 8.3 path and as its
+                # long form, and a task that counted ITSELF as a sibling would never archive its plan.
+                if ($other.Name -eq (Split-Path -Path $resolvedTask -Leaf)) { continue }
+                $otherText = Get-Content -LiteralPath $other.FullName -Raw -Encoding UTF8
+                if ($otherText -and $otherText.Contains($planLeaf)) { $shared++ }
+            }
+        }
+        # A forwarding record is not a plan: the plan it names was archived when its last active
+        # task closed, so there is nothing left to archive here.
+        if (@(Get-Content -LiteralPath $candidate -Encoding UTF8) -ccontains '- Status: `moved`') {
+            $planNote = "$($planResolution.Relative) is a forwarding record; its plan was archived earlier and was not touched"
+        } elseif ($shared -gt 0) {
+            $planNote = "the related plan $($planResolution.Relative) is still named by $shared other active task(s), so it stays active"
+        } elseif (@(Get-Content -LiteralPath $candidate -Encoding UTF8 | Where-Object { $_ -match '^\s*-\s*\[\s\]\s+' }).Count -gt 0) {
+            # No other task names it, which says nothing about whether the PLAN is finished. Its own
+            # unchecked items decide that, and the person closing the task decides what to do next.
+            $planNote = "the related plan $($planResolution.Relative) still has unchecked items, so it stays active"
+        } else {
+            $planFull = $candidate
+        }
+    }
+}
+
+$completedTaskDir = Join-Path -Path $repoRoot -ChildPath '.ai\tasks\completed'
+if (-not (Test-Path -LiteralPath $completedTaskDir -PathType Container)) {
+    Write-Error "Completed task directory not found: $completedTaskDir"
+    exit 1
+}
+$taskDestination = Join-Path -Path $completedTaskDir -ChildPath (Split-Path -Path $resolvedTask -Leaf)
+if (Test-Path -LiteralPath $taskDestination) {
+    Write-Error "Refusing to overwrite completed task: $taskDestination"
+    exit 1
+}
+
+$planDestination = ''
+if ($planFull) {
+    $completedPlanDir = Join-Path -Path $repoRoot -ChildPath '.ai\plans\completed'
+    if (-not (Test-Path -LiteralPath $completedPlanDir -PathType Container)) {
+        Write-Error "Completed plan directory not found: $completedPlanDir"
+        exit 1
+    }
+    $planDestination = Join-Path -Path $completedPlanDir -ChildPath (Split-Path -Path $planFull -Leaf)
+    if (Test-Path -LiteralPath $planDestination) {
+        Write-Error "Refusing to overwrite completed plan: $planDestination"
+        exit 1
+    }
+}
+
+function Get-RepoRelative {
+    param([string]$RepoRoot, [string]$Path)
+    $forward = $Path -replace '\\', '/'
+    $rootForward = ($RepoRoot -replace '\\', '/').TrimEnd('/')
+    if ($forward.StartsWith($rootForward + '/')) { return $forward.Substring($rootForward.Length + 1) }
+    return $forward
+}
+
 if ($Check) {
     Write-Output "Task passes the mechanical completion gates: $resolvedTask"
     if ($gateBlocking -ne 0) {
@@ -308,49 +596,86 @@ if ($Check) {
             Write-Output '      Closing it will append a Discovery Gate Note recording that. Closure is not blocked.'
         }
     }
-    if ($profileNote) {
-        Write-Output "Note: this task has $profileNote, so profile role evidence was not checked."
-    }
-    Write-Output 'Nothing was moved (-Check). The remaining Definition of Done conditions are yours to verify.'
+    if ($profileNote) { Write-Output "Note: this task has $profileNote, so profile role evidence was not checked." }
+    if ($planNote) { Write-Output "Note: $planNote." }
+    Write-Output "Would set Status to completed and archive -> $(Get-RepoRelative -RepoRoot $repoRoot -Path $taskDestination)"
+    if ($planDestination) { Write-Output "Would archive the plan -> $(Get-RepoRelative -RepoRoot $repoRoot -Path $planDestination)" }
+    Write-Output 'Nothing was moved or edited (-Check). The remaining Definition of Done conditions are yours to verify.'
     exit 0
 }
 
-$completedTaskDir = Join-Path -Path $repoRoot -ChildPath '.ai\tasks\completed'
-if (-not (Test-Path -LiteralPath $completedTaskDir -PathType Container)) {
-    Write-Error "Completed task directory not found: $completedTaskDir"
-    exit 1
+# --- Writing starts here ------------------------------------------------------------------------
+# ORDER IS THE GUARANTEE. Both archives are written from staged copies FIRST; the originals keep
+# their original bytes until both destinations exist. A failure therefore leaves the records exactly
+# as they were, never an active record marked completed, and never a link to a plan that was not
+# archived. This is recoverable-failure safety, not crash atomicity: a process killed between two
+# file operations can still leave a copy in completed/ and the original in active/, which the
+# already-closed answer and the refuse-to-overwrite check make safe to re-run and easy to see.
+$today = Get-Date -Format 'yyyy-MM-dd'
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$stageDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('forgeos-close-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+
+# The FIRST Status and Updated lines only: the task template carries a second Status inside its
+# Blocked section, and that one answers a different question.
+function Set-RecordState {
+    param([string]$Path, [string]$State, [string]$Today, [System.Text.Encoding]$Encoding)
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $doneStatus = $false; $doneUpdated = $false
+    $out = foreach ($line in $lines) {
+        if (-not $doneStatus -and $line -match '^\s*-\s*Status:') { $doneStatus = $true; "- Status: ``$State``" }
+        elseif (-not $doneUpdated -and $line -match '^\s*-\s*Updated:') { $doneUpdated = $true; "- Updated: ``$Today``" }
+        else { $line }
+    }
+    [System.IO.File]::WriteAllText($Path, (($out -join "`n") + "`n"), $Encoding)
 }
 
-$taskDestination = Join-Path -Path $completedTaskDir -ChildPath (Split-Path -Path $resolvedTask -Leaf)
-if (Test-Path -LiteralPath $taskDestination) {
-    Write-Error "Refusing to overwrite completed task: $taskDestination"
-    exit 1
+# Keep the forward link pointing at where the record actually went. A trailing annotation, if the
+# line carries one, is preserved: it is the author's, not this script's.
+function Set-RecordLink {
+    param([string]$Path, [string]$Field, [string]$NewPath, [System.Text.Encoding]$Encoding)
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $done = $false
+    $out = foreach ($line in $lines) {
+        if (-not $done -and $line -match ('^\s*-\s*' + [regex]::Escape($Field) + ':')) {
+            $done = $true
+            $parts = $line -split '`'
+            $tail = ''
+            if ($parts.Count -ge 3) { $tail = $parts[2] }
+            "- ${Field}: ``$NewPath``$tail"
+        } else { $line }
+    }
+    [System.IO.File]::WriteAllText($Path, (($out -join "`n") + "`n"), $Encoding)
 }
 
-$relatedPlan = Get-RelatedPlanPath -RepoRoot $repoRoot -Content $taskContent
-$planDestination = $null
-if ($relatedPlan -and (Test-Path -LiteralPath $relatedPlan -PathType Leaf)) {
-    $completedPlanDir = Join-Path -Path $repoRoot -ChildPath '.ai\plans\completed'
-    if (-not (Test-Path -LiteralPath $completedPlanDir -PathType Container)) {
-        Write-Error "Completed plan directory not found: $completedPlanDir"
-        exit 1
+function Remove-StageDir {
+    param([string]$Dir)
+    foreach ($f in @('task.md', 'plan.md')) {
+        $sf = Join-Path $Dir $f
+        if (Test-Path -LiteralPath $sf) { Remove-Item -LiteralPath $sf -Force -ErrorAction SilentlyContinue }
     }
-    $planDestination = Join-Path -Path $completedPlanDir -ChildPath (Split-Path -Path $relatedPlan -Leaf)
-    if (Test-Path -LiteralPath $planDestination) {
-        Write-Error "Refusing to overwrite completed plan: $planDestination"
-        exit 1
-    }
+    if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Force -ErrorAction SilentlyContinue }
+}
+
+$stageTask = Join-Path $stageDir 'task.md'
+try {
+    Copy-Item -LiteralPath $resolvedTask -Destination $stageTask -ErrorAction Stop
+} catch {
+    [Console]::Error.WriteLine('Could not stage the task; nothing was changed.')
+    Remove-StageDir -Dir $stageDir
+    exit 1
+}
+Set-RecordState -Path $stageTask -State 'completed' -Today $today -Encoding $utf8NoBom
+if ($planDestination) {
+    Set-RecordLink -Path $stageTask -Field 'Related plan' -NewPath ('.ai/plans/completed/' + (Split-Path -Path $planFull -Leaf)) -Encoding $utf8NoBom
 }
 
 if ($needsGateNote) {
-    # Written while the task is still in active/ -- completed/ is an immutable archive, denied to
-    # the write tools by .claude/settings.json, and it should stay that way.
-    $closedOn = Get-Date -Format 'yyyy-MM-dd'
     $note = @"
 
 ## Discovery Gate Note
 
-Recorded automatically by ``scripts/ai/finish-task`` at closure on ``$closedOn``.
+Recorded automatically by ``scripts/ai/finish-task`` at closure on ``$today``.
 
 This task was closed while the project was still undefined: $gateBlocking blocking placeholder
 marker(s) remained in always-loaded context, and the task carried no ``Discovery Gate Override``.
@@ -359,33 +684,118 @@ It was therefore opened either before the gate existed or outside it.
 ``.ai/contract/discovery.md`` section 1 governs *opening* work, not closing it, so closure was not
 blocked. This note exists so the archive does not imply the project was defined at the time.
 "@
-    $encoding = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::AppendAllText($resolvedTask, ($note -replace "`r`n", "`n"), $encoding)
+    [System.IO.File]::AppendAllText($stageTask, ($note -replace "`r`n", "`n"), $utf8NoBom)
 }
 
-if ($PSCmdlet.ShouldProcess($resolvedTask, "Move task to $taskDestination")) {
-    Move-Item -LiteralPath $resolvedTask -Destination $taskDestination
+$stagePlan = ''
+if ($planDestination) {
+    $stagePlan = Join-Path $stageDir 'plan.md'
+    try {
+        Copy-Item -LiteralPath $planFull -Destination $stagePlan -ErrorAction Stop
+    } catch {
+        [Console]::Error.WriteLine('Could not stage the plan; nothing was changed.')
+        Remove-StageDir -Dir $stageDir
+        exit 1
+    }
+    Set-RecordState -Path $stagePlan -State 'completed' -Today $today -Encoding $utf8NoBom
+    Set-RecordLink -Path $stagePlan -Field 'Related task' -NewPath ('.ai/tasks/completed/' + (Split-Path -Path $resolvedTask -Leaf)) -Encoding $utf8NoBom
 }
 
-if ($relatedPlan -and (Test-Path -LiteralPath $relatedPlan -PathType Leaf)) {
-    if ($PSCmdlet.ShouldProcess($relatedPlan, "Move related plan to $planDestination")) {
-        Move-Item -LiteralPath $relatedPlan -Destination $planDestination
+function Get-RepoRelative {
+    param([string]$RepoRoot, [string]$Path)
+    $forward = $Path -replace '\\', '/'
+    $rootForward = ($RepoRoot -replace '\\', '/').TrimEnd('/')
+    if ($forward.StartsWith($rootForward + '/', [System.StringComparison]::OrdinalIgnoreCase)) { return $forward.Substring($rootForward.Length + 1) }
+    return $forward
+}
+
+# Publish. Destinations first, originals afterwards.
+try {
+    Copy-Item -LiteralPath $stageTask -Destination $taskDestination -ErrorAction Stop
+} catch {
+    if (Test-Path -LiteralPath $taskDestination) { Remove-Item -LiteralPath $taskDestination -Force -ErrorAction SilentlyContinue }
+    [Console]::Error.WriteLine("Could not write $taskDestination; nothing was closed and both records are unchanged.")
+    Remove-StageDir -Dir $stageDir
+    exit 1
+}
+if ($planDestination) {
+    try {
+        Copy-Item -LiteralPath $stagePlan -Destination $planDestination -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $taskDestination -Force -ErrorAction SilentlyContinue
+        [Console]::Error.WriteLine("Could not write $planDestination; nothing was closed and both records are unchanged.")
+        Remove-StageDir -Dir $stageDir
+        exit 1
     }
 }
 
-Write-Output "Archived task -> $taskDestination"
+$incomplete = $false
+try {
+    Remove-Item -LiteralPath $resolvedTask -Force -ErrorAction Stop
+} catch {
+    [Console]::Error.WriteLine("WARNING: the task was archived to $(Get-RepoRelative -RepoRoot $repoRoot -Path $taskDestination) but the original could not be removed.")
+    [Console]::Error.WriteLine("         Both copies now exist. Remove $(Get-RepoRelative -RepoRoot $repoRoot -Path $resolvedTask) yourself to finish the closure.")
+    $incomplete = $true
+}
+# Historical references keep resolving. Completed tasks named this plan at its ACTIVE path, and a
+# completed record is immutable -- so instead of rewriting somebody's archive, the old path keeps a
+# forwarding record saying where the plan went. It carries `Status: moved`, which the status readers
+# skip, so it never counts as an active plan.
+$planForward = ''
 if ($planDestination) {
-    Write-Output "Archived plan -> $planDestination"
+    $forwardRefs = 0
+    $completedTaskDir = Join-Path -Path $repoRoot -ChildPath '.ai\tasks\completed'
+    if (Test-Path -LiteralPath $completedTaskDir -PathType Container) {
+        foreach ($past in @(Get-ChildItem -LiteralPath $completedTaskDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+            $pastText = Get-Content -LiteralPath $past.FullName -Raw -Encoding UTF8
+            if ($pastText -and $pastText.Contains($planResolution.Relative)) { $forwardRefs++ }
+        }
+    }
+    if ($forwardRefs -gt 0) {
+        $planForward = $planFull
+        $planLeafName = [System.IO.Path]::GetFileNameWithoutExtension($planFull)
+        $archivedLeaf = Split-Path -Path $planDestination -Leaf
+        $forwardText = @"
+# Moved: $planLeafName
+
+- Status: ``moved``
+- Moved: ``$today``
+- Now at: ``.ai/plans/completed/$archivedLeaf``
+
+This file is a **forwarding record, not a plan**. The plan that lived here was archived when its
+last active task closed. $forwardRefs completed task record(s) still name this path, and a completed
+record is never rewritten, so this note keeps those references resolving.
+
+Read the plan at its archived path above. Nothing should be added here.
+"@
+        [System.IO.File]::WriteAllText($planForward, ($forwardText -replace "`r`n", "`n"), $utf8NoBom)
+    }
 }
-if ($profileNote) {
-    Write-Output "Note: this task has $profileNote, so profile role evidence was not checked."
+
+if ($planDestination -and -not $planForward) {
+    try {
+        Remove-Item -LiteralPath $planFull -Force -ErrorAction Stop
+    } catch {
+        [Console]::Error.WriteLine("WARNING: the plan was archived to $(Get-RepoRelative -RepoRoot $repoRoot -Path $planDestination) but the original could not be removed.")
+        [Console]::Error.WriteLine("         Both copies now exist. Remove $(Get-RepoRelative -RepoRoot $repoRoot -Path $planFull) yourself to finish the closure.")
+        $incomplete = $true
+    }
 }
+Remove-StageDir -Dir $stageDir
+
+Write-Output "Archived task -> $(Get-RepoRelative -RepoRoot $repoRoot -Path $taskDestination)"
+if ($planDestination) { Write-Output "Archived plan -> $(Get-RepoRelative -RepoRoot $repoRoot -Path $planDestination)" }
+if ($planForward) { Write-Output "Left a forwarding record -> $(Get-RepoRelative -RepoRoot $repoRoot -Path $planForward)" }
+
+Write-Output ''
+if ($profileNote) { Write-Output "Note: this task has $profileNote, so profile role evidence was not checked." }
+if ($planNote) { Write-Output "Note: $planNote." }
 if ($needsGateNote) {
     Write-Output "DISCOVERY GATE NOTE appended: closed with $gateBlocking blocking marker(s) and no override."
 } elseif ($gateBlocking -ne 0 -and $hasOverride) {
     Write-Output "Closed under a recorded Discovery Gate Override ($gateBlocking blocking marker(s) remain)."
 }
-Write-Output ''
-Write-Output 'Reminder: this script checked 5 mechanical gates. The Definition of Done has 11'
-Write-Output 'conditions. Confirm the other 6 in your final report, with evidence.'
+Write-Output 'Status set to completed. This script checked 6 mechanical gates; the Definition of Done has 11'
+Write-Output 'conditions. Confirm the other 5 in your final report, with evidence.'
+if ($incomplete) { exit 1 }
 exit 0

@@ -54,10 +54,17 @@ run_check() {   # run_check <name> <relative-script> <gating:0|1> [args...]
   fi
 
   local code tmpout tmperr
+  # The self-test defaults to compact, so the mode has to be passed to it either way. Verbose means
+  # verbose on BOTH shells: the PowerShell half has always passed -Verbose here, while this half
+  # passed nothing, so the child fell back to compact and printed no case lines -- and a parity
+  # check reading this log then found no cases to compare.
+  local child_extra=()
+  if [ "$script" = 'scripts/hooks/selftest.sh' ]; then
+    if [ "$IS_COMPACT" -eq 1 ]; then child_extra=(--compact); else child_extra=(--verbose); fi
+  fi
   if [ "$IS_COMPACT" -eq 1 ]; then
-    # In compact mode: auto-pass --compact to selftest; capture output; show on failure only.
-    local compact_extra=()
-    [ "$script" = 'scripts/hooks/selftest.sh' ] && compact_extra=(--compact)
+    # In compact mode: capture the child's output and show it only when the check fails.
+    local compact_extra=("${child_extra[@]}")
     tmpout="$(mktemp)"
     tmperr="$(mktemp)"
     bash "$REPO_ROOT/$script" "$@" "${compact_extra[@]}" > "$tmpout" 2>"$tmperr"
@@ -75,7 +82,7 @@ run_check() {   # run_check <name> <relative-script> <gating:0|1> [args...]
     printf '%.0s=' {1..78}; echo ''
     echo "CHECK: $name"
     printf '%.0s=' {1..78}; echo ''
-    bash "$REPO_ROOT/$script" "$@" | tee -a "$RUN_LOG"
+    bash "$REPO_ROOT/$script" "$@" ${child_extra[@]+"${child_extra[@]}"} | tee -a "$RUN_LOG"
     code=$?
   fi
 

@@ -474,6 +474,522 @@ legacy_ok=0
 printf '%s' "$legacy_out" | grep -q 'no Profile Compliance section' && legacy_ok=$((legacy_ok + 1))
 assert_code 'evidence: task without the section still closes with its note' 2 "$legacy_ok"
 
+# --- closure integrity: the archive must tell the truth about itself -----------------------------
+# Field evidence from three adopted projects: completed records still read `Status: active`, and one
+# task whose Related plan line said "`docs/roadmap.md` section M-0" archived the project's ROADMAP
+# as a plan. Both are fixed and pinned here. Fixtures are synthetic; no adopter file is read.
+close_source_repo="$(cd "$HOOK_DIR/../.." && pwd)"
+close_fx() {   # close_fx <name> -> echoes root
+  local r="$tmp_root/$1"
+  mkdir -p "$r/scripts/ai" "$r/.ai/tasks/active" "$r/.ai/tasks/completed" \
+           "$r/.ai/plans/active" "$r/.ai/plans/completed" "$r/docs"
+  cp "$close_source_repo/scripts/ai/finish-task.sh" "$r/scripts/ai/finish-task.sh"
+  echo "$r"
+}
+close_task() {   # close_task <path> <related plan value> [results value]
+  printf '# T\n\n## Metadata\n\n- Status: `active`\n- Updated: `2026-01-01`\n- Related plan: %s\n\n## Acceptance Criteria\n\n- [x] done -- passed: evidence\n\n## Completion Evidence\n\n- Results: %s\n\n## Blocked\n\n- Status: `no`\n' "$2" "${3:-observed}" > "$1"
+}
+close_plan() {   # close_plan <path>
+  printf '# P\n\n## Metadata\n\n- Status: `active`\n- Updated: `2026-01-01`\n- Related task: `.ai/tasks/active/t1.md`\n' > "$1"
+}
+
+cr="$(close_fx close-ok)"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/active/p1.md` (slice 1)'
+close_plan "$cr/.ai/plans/active/p1.md"
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" >/dev/null 2>&1
+ok=0
+[ -f "$cr/.ai/tasks/completed/t1.md" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/plans/completed/p1.md" ] && ok=$((ok + 1))
+grep -qx -- '- Status: `completed`' "$cr/.ai/tasks/completed/t1.md" && ok=$((ok + 1))
+grep -qF -- '- Related plan: `.ai/plans/completed/p1.md` (slice 1)' "$cr/.ai/tasks/completed/t1.md" && ok=$((ok + 1))
+grep -qx -- '- Status: `completed`' "$cr/.ai/plans/completed/p1.md" && ok=$((ok + 1))
+grep -qF -- '- Related task: `.ai/tasks/completed/t1.md`' "$cr/.ai/plans/completed/p1.md" && ok=$((ok + 1))
+# The Blocked section answers a different question and must be left alone.
+grep -qx -- '- Status: `no`' "$cr/.ai/tasks/completed/t1.md" && ok=$((ok + 1))
+assert_code 'closure: the archive says completed and the plan link points where the plan went' 7 "$ok"
+
+cr="$(close_fx close-roadmap)"
+printf '# Roadmap\n\nnot a plan\n' > "$cr/docs/roadmap.md"
+close_task "$cr/.ai/tasks/active/t1.md" '`docs/roadmap.md` section M-0'
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+grep -q 'out-of-scope plan' <<<"$close_out" && ok=$((ok + 1))
+[ -f "$cr/docs/roadmap.md" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+[ -z "$(ls -A "$cr/.ai/plans/completed")" ] && ok=$((ok + 1))
+grep -qx -- '- Status: `active`' "$cr/.ai/tasks/active/t1.md" && ok=$((ok + 1))
+assert_code 'closure: a related plan outside .ai/plans/ is refused and nothing moves' 6 "$ok"
+
+cr="$(close_fx close-shared)"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/active/p1.md`'
+close_task "$cr/.ai/tasks/active/t2.md" '`.ai/plans/active/p1.md`'
+close_plan "$cr/.ai/plans/active/p1.md"
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/completed/t1.md" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/plans/active/p1.md" ] && ok=$((ok + 1))
+grep -q 'still named by 1 other active task' <<<"$close_out" && ok=$((ok + 1))
+assert_code 'closure: a plan another active task still names stays active' 4 "$ok"
+
+cr="$(close_fx close-evidence)"
+close_task "$cr/.ai/tasks/active/t1.md" '`none`' 'unknown'
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+grep -q 'unobserved evidence' <<<"$close_out" && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+mkdir -p "$cr/.ai/memory/decisions"
+printf '# A recorded decision
+' > "$cr/.ai/memory/decisions/waiver-ref.md"
+close_task "$cr/.ai/tasks/active/t2.md" '`none`' 'waived: scope=Results; reason=this repository ships no test suite; risk=regressions surface only in review; ref=.ai/memory/decisions/waiver-ref.md'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t2.md" >/dev/null 2>&1
+[ "$?" -eq 0 ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/completed/t2.md" ] && ok=$((ok + 1))
+assert_code 'closure: unobserved evidence is refused and a written waiver closes' 5 "$ok"
+
+cr="$(close_fx close-check)"
+close_task "$cr/.ai/tasks/active/t1.md" '`none`'
+before_sum="$(md5sum < "$cr/.ai/tasks/active/t1.md")"
+check_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" --check 2>&1)"
+check_code=$?
+ok=0
+[ "$check_code" -eq 0 ] && ok=$((ok + 1))
+[ "$before_sum" = "$(md5sum < "$cr/.ai/tasks/active/t1.md")" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+grep -q 'Would set Status to completed' <<<"$check_out" && ok=$((ok + 1))
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" >/dev/null 2>&1
+repeat_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/completed/t1.md" 2>&1)"
+repeat_code=$?
+[ "$repeat_code" -eq 0 ] && ok=$((ok + 1))
+grep -q 'Already closed' <<<"$repeat_out" && ok=$((ok + 1))
+assert_code 'closure: --check writes nothing, and closing an already closed task is safe' 6 "$ok"
+
+# --- closure integrity, part two: containment, waivers, and what a failure leaves ----------------
+# Review findings against the first slice, each reproduced before it was fixed: a plan path that
+# passed the `.ai/plans/` prefix test but RESOLVED to docs/roadmap.md; any file archived as a task;
+# a bare `waived:` switching the evidence gate off; and a refusal that had already rewritten the
+# record. Fixtures are synthetic.
+cr="$(close_fx close-escape)"
+mkdir -p "$cr/docs"
+printf '# Roadmap\n\nnot a plan\n' > "$cr/docs/roadmap.md"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/../../docs/roadmap.md`'
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+grep -q 'resolves outside .ai/plans/' <<<"$close_out" && ok=$((ok + 1))
+[ -f "$cr/docs/roadmap.md" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+grep -qx -- '- Status: `active`' "$cr/.ai/tasks/active/t1.md" && ok=$((ok + 1))
+assert_code 'closure: a plan path that resolves outside .ai/plans/ is refused' 5 "$ok"
+
+cr="$(close_fx close-nontask)"
+mkdir -p "$cr/docs"
+printf '# Overview\n\nnot a task\n' > "$cr/docs/overview.md"
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/docs/overview.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 1 ] && ok=$((ok + 1))
+grep -q 'resolves outside .ai/tasks/' <<<"$close_out" && ok=$((ok + 1))
+[ -f "$cr/docs/overview.md" ] && ok=$((ok + 1))
+[ -z "$(ls -A "$cr/.ai/tasks/completed")" ] && ok=$((ok + 1))
+assert_code 'closure: a file outside .ai/tasks/ is not archived as a task' 4 "$ok"
+
+cr="$(close_fx close-waiver)"
+ok=0
+close_task "$cr/.ai/tasks/active/t1.md" '`none`' 'waived:'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+close_task "$cr/.ai/tasks/active/t2.md" '`none`' 'waived: pending'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t2.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+mkdir -p "$cr/.ai/memory/decisions"
+printf '# A recorded decision
+' > "$cr/.ai/memory/decisions/waiver-ref.md"
+close_task "$cr/.ai/tasks/active/t3.md" '`none`' 'waived: scope=Results; reason=this repository ships no test suite; risk=regressions surface only in review; ref=.ai/memory/decisions/waiver-ref.md'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t3.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/completed/t3.md" ] && ok=$((ok + 1))
+assert_code 'closure: a waiver must give a reason, and may not restate pending' 5 "$ok"
+
+cr="$(close_fx close-planopen)"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/active/p1.md`'
+printf '# P\n\n## Metadata\n\n- Status: `active`\n- Updated: `2026-01-01`\n- Related task: `.ai/tasks/active/t1.md`\n\n## Steps\n\n- [ ] still open\n' > "$cr/.ai/plans/active/p1.md"
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+[ -f "$cr/.ai/plans/active/p1.md" ] && ok=$((ok + 1))
+grep -q 'still has unchecked items' <<<"$close_out" && ok=$((ok + 1))
+# The link must still point at the plan where it actually is.
+grep -qF -- '- Related plan: `.ai/plans/active/p1.md`' "$cr/.ai/tasks/completed/t1.md" && ok=$((ok + 1))
+assert_code 'closure: a plan with unchecked items stays active and keeps its link' 4 "$ok"
+
+# A refusal must leave both records byte for byte. The destination is made unavailable by putting a
+# DIRECTORY where the archived plan would go, which needs no permissions and no platform tricks.
+cr="$(close_fx close-failure)"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/active/p1.md`'
+close_plan "$cr/.ai/plans/active/p1.md"
+mkdir -p "$cr/.ai/plans/completed/p1.md"
+task_before="$(md5sum < "$cr/.ai/tasks/active/t1.md")"
+plan_before="$(md5sum < "$cr/.ai/plans/active/p1.md")"
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" >/dev/null 2>&1
+close_code=$?
+ok=0
+[ "$close_code" -eq 1 ] && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+[ "$task_before" = "$(md5sum < "$cr/.ai/tasks/active/t1.md")" ] && ok=$((ok + 1))
+[ "$plan_before" = "$(md5sum < "$cr/.ai/plans/active/p1.md")" ] && ok=$((ok + 1))
+[ ! -f "$cr/.ai/tasks/completed/t1.md" ] && ok=$((ok + 1))
+assert_code 'closure: a refused closure leaves both records byte for byte' 5 "$ok"
+
+# --- closure integrity, part three: history, interruption, and bounded waivers -------------------
+# Three gaps the review left open, each reproduced before it was closed: a shared plan archived
+# later left completed records pointing at a path that no longer existed; a duplicate active/archived
+# pair answered "already closed" while the duplicate stood; and a waiver needed nothing but length.
+cr="$(close_fx close-forward)"
+close_task "$cr/.ai/tasks/active/t1.md" '`.ai/plans/active/p1.md`'
+close_task "$cr/.ai/tasks/active/t2.md" '`.ai/plans/active/p1.md`'
+close_plan "$cr/.ai/plans/active/p1.md"
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" >/dev/null 2>&1
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t2.md" 2>&1)"
+ok=0
+[ -f "$cr/.ai/plans/completed/p1.md" ] && ok=$((ok + 1))
+# The old path still resolves, so the first task's archived reference is not broken.
+[ -f "$cr/.ai/plans/active/p1.md" ] && ok=$((ok + 1))
+grep -qxF -- '- Status: `moved`' "$cr/.ai/plans/active/p1.md" && ok=$((ok + 1))
+grep -qF -- '- Now at: `.ai/plans/completed/p1.md`' "$cr/.ai/plans/active/p1.md" && ok=$((ok + 1))
+grep -qF -- '- Related plan: `.ai/plans/active/p1.md`' "$cr/.ai/tasks/completed/t1.md" && ok=$((ok + 1))
+grep -q 'forwarding record' <<<"$close_out" && ok=$((ok + 1))
+assert_code 'closure: a shared plan leaves a forwarding record when it is finally archived' 6 "$ok"
+
+# A forwarding record is not a plan: nothing is archived from it, and it is not counted as work.
+close_task "$cr/.ai/tasks/active/t3.md" '`.ai/plans/active/p1.md`'
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t3.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+grep -q 'is a forwarding record' <<<"$close_out" && ok=$((ok + 1))
+[ -f "$cr/.ai/plans/active/p1.md" ] && ok=$((ok + 1))
+[ ! -f "$cr/.ai/plans/completed/p1.md.1" ] && ok=$((ok + 1))
+mkdir -p "$cr/scripts/command"
+cp "$close_source_repo/scripts/command/project-status.sh" "$cr/scripts/command/project-status.sh"
+printf '# P\n\n- Status: `active`\n' > "$cr/.ai/plans/active/still-open.md"
+bash "$cr/scripts/command/project-status.sh" --json 2>/dev/null | grep -qE '"plansActive": 1' && ok=$((ok + 1))
+assert_code 'closure: a forwarding record is not a plan and is not counted as one' 5 "$ok"
+
+cr="$(close_fx close-interrupted)"
+close_task "$cr/.ai/tasks/active/t1.md" '`none`'
+sed -e 's/^- Status: `active`/- Status: `completed`/' -e 's/^- Updated: `2026-01-01`/- Updated: `2026-09-25`/' \
+  "$cr/.ai/tasks/active/t1.md" > "$cr/.ai/tasks/completed/t1.md"
+check_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" --check 2>&1)"
+check_code=$?
+ok=0
+[ "$check_code" -eq 0 ] && ok=$((ok + 1))
+grep -q 'Interrupted closure' <<<"$check_out" && ok=$((ok + 1))
+[ -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+grep -q 'Recovered an interrupted closure' <<<"$close_out" && ok=$((ok + 1))
+[ ! -f "$cr/.ai/tasks/active/t1.md" ] && ok=$((ok + 1))
+repeat_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/completed/t1.md" 2>&1)"
+grep -q 'Already closed' <<<"$repeat_out" && ok=$((ok + 1))
+assert_code 'closure: an interrupted closure is recovered, and repeating it is safe' 7 "$ok"
+
+cr="$(close_fx close-conflict)"
+close_task "$cr/.ai/tasks/active/t1.md" '`none`'
+cp "$cr/.ai/tasks/active/t1.md" "$cr/.ai/tasks/completed/t1.md"
+printf '\n## A section somebody added to the archive\n' >> "$cr/.ai/tasks/completed/t1.md"
+task_before="$(md5sum < "$cr/.ai/tasks/active/t1.md")"
+archive_before="$(md5sum < "$cr/.ai/tasks/completed/t1.md")"
+close_out="$(bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/t1.md" 2>&1)"
+close_code=$?
+ok=0
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+grep -q 'CONFLICT' <<<"$close_out" && ok=$((ok + 1))
+[ "$task_before" = "$(md5sum < "$cr/.ai/tasks/active/t1.md")" ] && ok=$((ok + 1))
+[ "$archive_before" = "$(md5sum < "$cr/.ai/tasks/completed/t1.md")" ] && ok=$((ok + 1))
+assert_code 'closure: two records with one name are a conflict, and neither is touched' 4 "$ok"
+
+cr="$(close_fx close-waiver-shape)"
+mkdir -p "$cr/.ai/memory/decisions"
+printf '# A recorded decision\n' > "$cr/.ai/memory/decisions/2026-01-01-no-suite.md"
+W_OK='waived: scope=Results; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+close_task "$cr/.ai/tasks/active/good.md" '`none`' "$W_OK"
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/good.md" >/dev/null 2>&1
+close_code=$?
+ok=0
+[ "$close_code" -eq 0 ] && ok=$((ok + 1))
+close_task "$cr/.ai/tasks/active/bare.md" '`none`' 'waived:'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/bare.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+close_task "$cr/.ai/tasks/active/noref.md" '`none`' 'waived: scope=Results; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/absent.md'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/noref.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+close_task "$cr/.ai/tasks/active/scope.md" '`none`' 'waived: scope=Commands executed; reason=no automated suite exists here; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/scope.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+close_task "$cr/.ai/tasks/active/hidden.md" '`none`' 'waived: scope=Results; reason=pending the nightly run; risk=regressions surface only in review; ref=.ai/memory/decisions/2026-01-01-no-suite.md'
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/hidden.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+# A waiver rescues nothing else: an unchecked criterion is still an unchecked criterion.
+printf '# T\n\n## Metadata\n\n- Status: `active`\n- Related plan: `none`\n\n## Acceptance Criteria\n\n- [ ] not done\n\n## Completion Evidence\n\n- Results: %s\n' "$W_OK" > "$cr/.ai/tasks/active/crit.md"
+bash "$cr/scripts/ai/finish-task.sh" --task "$cr/.ai/tasks/active/crit.md" >/dev/null 2>&1
+close_code=$?
+[ "$close_code" -eq 2 ] && ok=$((ok + 1))
+assert_code 'closure: a waiver must name scope, reason, risk, and a resolvable reference' 6 "$ok"
+
+# --- the brief pays its own budget ---------------------------------------------------------------
+# Before this, the brief measured itself, announced it was over, and printed everything anyway --
+# so an adopter with a long Arabic task title and a few blockers was told to shorten its own
+# project rules by hand. It now drops OPTIONAL context whole, in a fixed order, and says what it
+# dropped and where to find it. Mandatory content is never touched.
+brief_fx() {   # brief_fx <name> -> echoes root
+  local r="$tmp_root/$1"
+  mkdir -p "$r/scripts/command" "$r/scripts/lib" "$r/.ai/context" "$r/.ai/tasks/active" \
+           "$r/.ai/tasks/inbox" "$r/docs"
+  cp "$close_source_repo/scripts/command/project-status.sh" "$r/scripts/command/project-status.sh"
+  cp "$close_source_repo/scripts/lib/session-policy.json"   "$r/scripts/lib/session-policy.json"
+  cp "$close_source_repo/templates/constraints-template.md" "$r/.ai/context/constraints.md"
+  cp "$close_source_repo/templates/governance-template.json" "$r/.ai/context/governance.json"
+  printf '# Current State\n\n## Position\n\n- Now: building it\n- Next: the roadmap names it\n- Blocked by: none\n' > "$r/.ai/context/current-state.md"
+  printf '# Roadmap\n\n## M-1 - First capability\n\n| # | Criterion | Met when | Status |\n| --- | --- | --- | --- |\n| 1 | Harden the release workflow security | a test proves it | not built |\n' > "$r/docs/roadmap.md"
+  echo "$r"
+}
+brief_json() {   # brief_json <root> <python expression over d>
+  local py
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import json' >/dev/null 2>&1; then
+      bash "$1/scripts/command/project-status.sh" --section brief --json > "$1/brief.json" 2>/dev/null
+      "$py" -c "import json,sys; d=json.load(open(sys.argv[1], encoding='utf-8'))['budget']; sys.exit(0 if ($2) else 1)" "$1/brief.json"
+      return $?
+    fi
+  done
+  return 2
+}
+
+# A plain project, no active task: nothing to shorten, and the brief says so by saying nothing.
+bfx="$(brief_fx brief-fits)"
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/out.txt" 2>&1
+brief_code=$?
+ok=0
+[ "$brief_code" -eq 0 ] && ok=$((ok + 1))
+brief_json "$bfx" "d['withinBudget'] is True and d['reductionLevel'] == 0 and d['mandatoryOverflow'] is False" && ok=$((ok + 1))
+grep -qE '^Budget: ~[0-9]+ tokens of 800 \(UTF-8 bytes / 4, an estimate\)\.$' "$bfx/out.txt" && ok=$((ok + 1))
+grep -q 'Economy: large-session protocol' "$bfx/out.txt" && ok=$((ok + 1))
+assert_code 'brief: a project inside its budget is printed whole' 4 "$ok"
+
+# A long Arabic capability, a long ledger line, six inbox alternatives: the ladder has to work.
+bfx="$(brief_fx brief-long)"
+printf '# Current State\n\n## Position\n\n- Now: %s\n- Next: x\n- Blocked by: %s\n' \
+  'إعادة بناء طبقة الإبطال مع تتبع كامل للرسائل وتنبيهات الفشل الدائمة عبر الطابور' \
+  'قرار المالك على قناة التنبيه' > "$bfx/.ai/context/current-state.md"
+printf '# Roadmap\n\n## M-1 - c\n\n| # | Criterion | Met when | Status |\n| --- | --- | --- | --- |\n| 1 | %s | a test proves it | partial |\n' \
+  'تشغيل المرسل الدوري وتنبيه فشله مع إثبات تسليم خارجي وقياس طزاجة الكاش في بيئة إنتاجية' > "$bfx/docs/roadmap.md"
+for i in 1 2 3 4 5 6; do printf '# Task %s\n\n- Status: `inbox`\n' "$i" > "$bfx/.ai/tasks/inbox/2026-09-2$i-مهمة-احتياطية-طويلة-الاسم-رقم-$i.md"; done
+printf '# Task\n\n- Status: `active`\n' > "$bfx/.ai/tasks/active/2026-09-25-مهمة-نشطة-ذات-عنوان-عربي-طويل-جدا-لاختبار-الميزانية.md"
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/out.txt" 2>&1
+ok=0
+brief_json "$bfx" "d['withinBudget'] is True and d['reductionLevel'] > 0 and d['estimatedTokens'] <= 800" && ok=$((ok + 1))
+grep -q 'Shortened to fit:' "$bfx/out.txt" && ok=$((ok + 1))
+# Every pointer it leaves behind must be a real file or a real command.
+grep -q '.ai/contract/economy.md section 4' "$bfx/out.txt" && ok=$((ok + 1))
+# The Arabic survives: shortening drops whole fields, it never cuts text mid-character.
+grep -q 'الإبطال' "$bfx/out.txt" && ok=$((ok + 1))
+assert_code 'brief: a long project is shortened to fit and says what it dropped' 4 "$ok"
+
+# Mandatory content alone over budget: printed whole, and reported as overflow rather than "fits".
+bfx="$(brief_fx brief-overflow)"
+{ printf '# Project Constraints\n\n## Prompt Prohibitions\n\n### Always\n\n'
+  for i in $(seq 1 40); do printf -- '- لا تفعل شيئا من هذه الامور الطويلة رقم %s في اي جلسة عمل مهما كان السبب\n' "$i"; done; } > "$bfx/.ai/context/constraints.md"
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/out.txt" 2>&1
+ok=0
+brief_json "$bfx" "d['withinBudget'] is False and d['mandatoryOverflow'] is True and d['overflowTokens'] > 0" && ok=$((ok + 1))
+grep -q 'MANDATORY OVERFLOW' "$bfx/out.txt" && ok=$((ok + 1))
+[ "$(grep -c 'لا تفعل شيئا من هذه' "$bfx/out.txt")" -eq 40 ] && ok=$((ok + 1))
+grep -q 'Execution: single-agent only' "$bfx/out.txt" && ok=$((ok + 1))
+grep -q 'Stop after the local commit and report. Do not push.' "$bfx/out.txt" && ok=$((ok + 1))
+assert_code 'brief: mandatory content over budget is printed whole and reported' 5 "$ok"
+
+# Shortening must never cost a rule, an identifier, a usable path, or the blocked verdict.
+bfx="$(brief_fx brief-safety)"
+printf '# Current State\n\n## Position\n\n- Now: %s\n- Next: x\n- Blocked by: %s\n' \
+  'حالة طويلة جدا لاجبار المختصر على العمل مع نص عربي كثير التفاصيل' \
+  'قرار المالك على قناة التنبيه وسؤال مفتوح عن الكاش' > "$bfx/.ai/context/current-state.md"
+for i in 1 2 3 4 5 6 7 8; do printf '# T%s\n\n- Status: `inbox`\n' "$i" > "$bfx/.ai/tasks/inbox/2026-09-1$i-بديل-طويل-$i.md"; done
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/out.txt" 2>&1
+ok=0
+grep -q 'Execution: single-agent only' "$bfx/out.txt" && ok=$((ok + 1))
+grep -qE '^Repository: .* HEAD .* version ' "$bfx/out.txt" && ok=$((ok + 1))
+grep -qE '^Capability: ' "$bfx/out.txt" && ok=$((ok + 1))
+grep -qE '^Blocked: ' "$bfx/out.txt" && ok=$((ok + 1))
+grep -qE '^Read first: .*\.ai/context/current-state\.md' "$bfx/out.txt" && ok=$((ok + 1))
+grep -q 'Do not:' "$bfx/out.txt" && ok=$((ok + 1))
+assert_code 'brief: shortening never drops a rule, an identity, or the blocked verdict' 6 "$ok"
+
+# Deterministic, and it writes nothing: the same project renders the same bytes twice.
+bfx="$(brief_fx brief-deterministic)"
+(cd "$bfx" && find . -type f | sort) > "$bfx.before"
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/one.txt" 2>/dev/null
+bash "$bfx/scripts/command/project-status.sh" --section brief > "$bfx/two.txt" 2>/dev/null
+(cd "$bfx" && find . -type f -not -name 'one.txt' -not -name 'two.txt' -not -name 'brief.json' | sort) > "$bfx.after"
+ok=0
+cmp -s "$bfx/one.txt" "$bfx/two.txt" && ok=$((ok + 1))
+cmp -s "$bfx.before" "$bfx.after" && ok=$((ok + 1))
+# The measured figure describes the text that was printed, notice included.
+brief_bytes_now="$(sed -n '3,$p' "$bfx/one.txt" | head -c 100000 | wc -c | tr -d ' ')"
+[ "$brief_bytes_now" -gt 0 ] && ok=$((ok + 1))
+brief_json "$bfx" "d['bytes'] > 0 and d['estimatedTokens'] == -(-d['bytes'] // 4)" && ok=$((ok + 1))
+assert_code 'brief: the same project renders the same brief, and the figure matches the text' 4 "$ok"
+
+# --- mandatory rules: one contract, and the same list in both shells ------------------------------
+# A prohibition that reaches one shell's reader and not the other's is a guardrail that depends on
+# which machine ran the command. These cases assert the rules themselves -- text and order -- from a
+# known fixture, so a parser that drifts is caught by its output and not by a matching case name.
+rule_lines() {   # rule_lines <root> <section> -> the rule block, one entry per line, verbatim
+  bash "$1/scripts/command/project-status.sh" --section "$2" 2>/dev/null |
+    awk '/^Do not:$/ { on = 1; next }
+         on && (/^Report:/ || /^Final report/) { exit }
+         on && NF { print }'
+}
+rules_match_json() {   # rules_match_json <root> <expected-file> -- compares without printing, so a
+  local py             # multibyte rule cannot fail on the console encoding instead of on the data
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import json' >/dev/null 2>&1; then
+      bash "$1/scripts/command/project-status.sh" --section brief --json > "$1/rules.json" 2>/dev/null
+      "$py" -c "import json,io,sys
+d = json.load(io.open(sys.argv[1], encoding='utf-8'))['doNot']
+e = io.open(sys.argv[2], encoding='utf-8').read().split('\n')[:-1]
+sys.exit(0 if d == e else 1)" "$1/rules.json" "$2"
+      return $?
+    fi
+  done
+  return 2
+}
+
+# A '-' and any run of spaces or tabs is the bullet the author meant. Requiring exactly "- " cost a
+# rule: a tab-indented prohibition was dropped here and emitted on Windows, silently, both times.
+rfx="$(brief_fx rules-bullets)"
+{ printf '# C\n\n## Prompt Prohibitions\n\n### Always\n\n'
+  printf -- '- one space after the dash\n'
+  printf -- '-  two spaces after the dash\n'
+  printf -- '-\ta tab after the dash\n'
+  printf -- '- trailing padding is trimmed   \n'; } > "$rfx/.ai/context/constraints.md"
+{ printf 'one space after the dash\n'
+  printf 'two spaces after the dash\n'
+  printf 'a tab after the dash\n'
+  printf 'trailing padding is trimmed\n'; } > "$rfx/expected.txt"
+sed 's/^/- /' "$rfx/expected.txt" > "$rfx/expected-prompt.txt"
+rule_lines "$rfx" brief  > "$rfx/got-brief.txt"
+rule_lines "$rfx" prompt > "$rfx/got-prompt.txt"
+ok=0
+cmp -s "$rfx/got-brief.txt"  "$rfx/expected.txt"        && ok=$((ok + 1))
+cmp -s "$rfx/got-prompt.txt" "$rfx/expected-prompt.txt" && ok=$((ok + 1))
+rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
+assert_code 'rules: a tab or padding around a bullet never costs a rule' 3 "$ok"
+
+# Only bullets inside a ### subsection are rules. The prose above the first one explains the format
+# with bullets of its own, and emitting those turned documentation into prohibitions.
+rfx="$(brief_fx rules-structure)"
+{ printf '# C\n\n## Prompt Prohibitions\n\nProse explaining the format, with bullets of its own:\n\n'
+  printf -- '- when-not `prose`: documentation, never a rule\n'
+  printf -- '- prose, never a rule\n\n### Always\n\n'
+  printf -- '- a real rule\n'
+  printf -- '-no space after the dash\n'
+  printf '  - an indented bullet\n'
+  printf 'not a bullet at all\n\n#### A deeper heading\n\n'
+  printf -- '- a rule under a deeper heading\n\n## Another Section\n\n'
+  printf -- '- outside the section\n'; } > "$rfx/.ai/context/constraints.md"
+{ printf 'a real rule\n'; printf 'a rule under a deeper heading\n'; } > "$rfx/expected.txt"
+sed 's/^/- /' "$rfx/expected.txt" > "$rfx/expected-prompt.txt"
+rule_lines "$rfx" brief  > "$rfx/got-brief.txt"
+rule_lines "$rfx" prompt > "$rfx/got-prompt.txt"
+ok=0
+cmp -s "$rfx/got-brief.txt"  "$rfx/expected.txt"        && ok=$((ok + 1))
+cmp -s "$rfx/got-prompt.txt" "$rfx/expected-prompt.txt" && ok=$((ok + 1))
+grep -q 'never a rule'        "$rfx/got-brief.txt" || ok=$((ok + 1))
+grep -q 'outside the section' "$rfx/got-brief.txt" || ok=$((ok + 1))
+assert_code 'rules: headings and prose bullets are never emitted as rules' 4 "$ok"
+
+# when-not drops its rule only when the slice is about that subject, and the author's capitalization
+# is not part of the question: the subject is matched case-insensitively on both shells.
+rfx="$(brief_fx rules-conditional)"
+printf '# Roadmap\n\n## M-4 - Billing engine\n\n| # | Criterion | Met when | Status |\n| --- | --- | --- | --- |\n| 1 | Build it | a test proves it | not built |\n' > "$rfx/docs/roadmap.md"
+{ printf '# C\n\n## Prompt Prohibitions\n\n### Conditional\n\n'
+  printf -- '- when-not `billing`: dropped, the slice is about billing\n'
+  printf -- '- when-not `BILLING`: dropped too, capitalization is not the question\n'
+  printf -- '- when-not `payments`: kept, the slice is not about payments\n'
+  printf -- '- when-not `empty`:\n\n### Always\n\n'
+  printf -- '- kept whatever the slice is about\n'; } > "$rfx/.ai/context/constraints.md"
+{ printf 'kept, the slice is not about payments\n'
+  printf 'when-not `empty`:\n'
+  printf 'kept whatever the slice is about\n'; } > "$rfx/expected.txt"
+rule_lines "$rfx" brief > "$rfx/got-brief.txt"
+ok=0
+cmp -s "$rfx/got-brief.txt" "$rfx/expected.txt" && ok=$((ok + 1))
+grep -q 'about billing' "$rfx/got-brief.txt" || ok=$((ok + 1))
+rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
+assert_code 'rules: a conditional rule is dropped only when the subject matches it' 3 "$ok"
+
+# The separators inside a when-not entry are runs of spaces or tabs, like the bullet marker. A tab
+# after `when-not`, a doubled space, or a colon with nothing after it used to send a well-formed
+# rule down the malformed path here: it printed verbatim and its condition never ran.
+rfx="$(brief_fx rules-separators)"
+printf '# Roadmap\n\n## M-4 - Billing engine\n\n| # | Criterion | Met when | Status |\n| --- | --- | --- | --- |\n| 1 | Build it | a test proves it | not built |\n' > "$rfx/docs/roadmap.md"
+{ printf '# C\n\n## Prompt Prohibitions\n\n### Conditional\n\n'
+  printf -- '- when-not\t`billing`: a tab after when-not\n'
+  printf -- '- when-not  `billing`: two spaces after when-not\n'
+  printf -- '- when-not `billing`:no space after the colon\n'
+  printf -- '- when-not `payments`:   a padded colon, and no match\n\n### Always\n\n'
+  printf -- '- always kept\n'; } > "$rfx/.ai/context/constraints.md"
+{ printf 'a padded colon, and no match\n'; printf 'always kept\n'; } > "$rfx/expected.txt"
+sed 's/^/- /' "$rfx/expected.txt" > "$rfx/expected-prompt.txt"
+rule_lines "$rfx" brief  > "$rfx/got-brief.txt"
+rule_lines "$rfx" prompt > "$rfx/got-prompt.txt"
+ok=0
+cmp -s "$rfx/got-brief.txt"  "$rfx/expected.txt"        && ok=$((ok + 1))
+cmp -s "$rfx/got-prompt.txt" "$rfx/expected-prompt.txt" && ok=$((ok + 1))
+grep -q 'when-not' "$rfx/got-brief.txt" || ok=$((ok + 1))
+rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
+assert_code 'rules: a tab or padding inside when-not still applies the condition' 4 "$ok"
+
+# The brief, the session package, and the JSON are three renderings of one list. Multibyte text,
+# backticks, paths, and internal punctuation travel through all three unchanged, and rendering
+# writes nothing.
+rfx="$(brief_fx rules-renderings)"
+{ printf '# C\n\n## Prompt Prohibitions\n\n### Always\n\n'
+  printf -- '- لا تدفع إلى المستودع العام\n'
+  printf -- '- never touch `scripts/lib/blueprint-manifest.json` or docs/design/\n'
+  printf -- '- a rule with: a colon, "quotes", and 50%% of a sign\n'; } > "$rfx/.ai/context/constraints.md"
+{ printf 'لا تدفع إلى المستودع العام\n'
+  printf 'never touch `scripts/lib/blueprint-manifest.json` or docs/design/\n'
+  printf 'a rule with: a colon, "quotes", and 50%% of a sign\n'; } > "$rfx/expected.txt"
+sed 's/^/- /' "$rfx/expected.txt" > "$rfx/expected-prompt.txt"
+(cd "$rfx" && find .ai docs scripts -type f | sort) > "$rfx.before"
+rule_lines "$rfx" brief  > "$rfx/got-brief.txt"
+rule_lines "$rfx" prompt > "$rfx/got-prompt.txt"
+(cd "$rfx" && find .ai docs scripts -type f | sort) > "$rfx.after"
+ok=0
+cmp -s "$rfx/got-brief.txt"  "$rfx/expected.txt"        && ok=$((ok + 1))
+cmp -s "$rfx/got-prompt.txt" "$rfx/expected-prompt.txt" && ok=$((ok + 1))
+rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
+cmp -s "$rfx.before" "$rfx.after" && ok=$((ok + 1))
+assert_code 'rules: the brief, the package, and the JSON carry the same list unchanged' 4 "$ok"
+
 # --- promoted roles: structured, and the prose form still honoured -------------------------------
 # content-site does not require security-reviewer. Only a promotion makes it enforceable, so these
 # cases fail the moment the promotion stops being read.

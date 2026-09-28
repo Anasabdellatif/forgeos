@@ -150,8 +150,11 @@ if (Test-Path -LiteralPath $ledger) {
 function Measure-Md {
     param([string]$Dir)
     if (-not (Test-Path -LiteralPath $Dir)) { return $null }
+    # A forwarding record carries `Status: `moved``: it keeps a historical reference resolving after
+    # its plan was archived, and it is NOT work in progress, so it is not counted as one.
     return @(Get-ChildItem -LiteralPath $Dir -File -Filter '*.md' -ErrorAction SilentlyContinue |
-             Where-Object { $_.Name -ne 'README.md' }).Count
+             Where-Object { $_.Name -ne 'README.md' } |
+             Where-Object { -not (@(Get-Content -LiteralPath $_.FullName -Encoding UTF8) -ccontains '- Status: `moved`') }).Count
 }
 $tInbox  = Measure-Md (Join-Path $repoRoot '.ai\tasks\inbox')
 $tActive = Measure-Md (Join-Path $repoRoot '.ai\tasks\active')
@@ -677,13 +680,18 @@ if (Test-Path -LiteralPath $constraintsPath) {
         # prohibitions -- found by running it.
         if ($line -match '^###\s') { $subOn = $true; continue }
         if (-not $subOn) { continue }
-        if ($line -notmatch '^-\s+(.*)$') { continue }
-        $entry = $Matches[1].Trim()
+        # The same bullet contract the POSIX half documents: '-' then at least one space or
+        # tab, and the text trimmed of trailing spaces, tabs, and a stray CR. '\s' was wider
+        # than that: it accepts separators awk cannot, and no one can see that in a file.
+        if ($line -notmatch '^-[ \t]+(.*)$') { continue }
+        $entry = $Matches[1] -replace '[ \t\r]+$', ''
         if (-not $entry) { continue }
         $dnFound = $true
-        if ($entry -match '^when-not\s+`(.+)`:\s*(.+)$') {
+        # The same separator contract the POSIX half documents: runs of spaces or tabs, and
+        # the text trimmed the same way. '\s' was wider than [[:blank:]] can be.
+        if ($entry -match '^when-not[ \t]+`(.+)`:[ \t]*(.+)$') {
             $cond = $Matches[1]
-            $text = $Matches[2].Trim()
+            $text = $Matches[2] -replace '[ \t\r]+$', ''
             # -notmatch is case-insensitive, which is what the POSIX half gets by lowercasing.
             if ($sectL -notmatch $cond) { $dn.Add('- ' + $text) }
         } else {
@@ -1050,6 +1058,7 @@ $briefDoNot = @($dn | ForEach-Object { $_ -replace '^- ', '' })
 $briefAltFound = $false; $briefAltSource = 'none'; $briefAltCandidates = @()
 if ($recBlocked) {
     $briefBlockedText = 'Blocked: yes -- ' + (@($recBlockers) -join '; ') + '. Do not start the capability above while a blocker stands.'
+    $briefBlockedFirst = $briefBlockedText
     if ($inboxNames.Count -gt 0) {
         $briefAltFound = $true; $briefAltSource = '.ai/tasks/inbox'; $briefAltCandidates = @($inboxNames)
         $briefBlockedText += "`nAlternative: not chosen here -- $($inboxNames.Count) task record(s) already written in .ai/tasks/inbox/ ($(@($inboxNames) -join ', ')); read each record's Blocked section before activating one."
@@ -1058,39 +1067,124 @@ if ($recBlocked) {
     }
 } else {
     $briefBlockedText = 'Blocked: no -- proceed with the capability above.'
+    $briefBlockedFirst = $briefBlockedText
 }
-$briefPrompt = @"
-# ForgeOS brief -- $promptSubject
+# --- the budget ladder ---------------------------------------------------------------------------
+# MANDATORY, never touched: the single-agent rule, the repository identity, the capability and the
+# row that defines it, the blocked verdict, the read-first instruction and entry point, governance
+# and scope, the Do-not list, and the report and push policy.
+#
+# Everything else is optional context, dropped WHOLE in a fixed order -- never truncated mid
+# sentence, and never a rule, an identifier, or a usable path. Each removal leaves a real file or a
+# real command that still answers the question.
+$briefMaxLevel = 7
 
-Session: $pkgSessionName | new session: $pkgNewSessionText | model: $pkgModel | effort: $pkgEffort
-Execution: single-agent only -- no subagents, review swarms, or background task loops.
-Repository: $repoName @ $branch | HEAD $commit | version $bpVersion | state $projectState
-Now: $briefNow
-Capability: $recCapability -- its acceptance criteria are its row in $recSource; read that row before writing anything.
-$briefBlockedText
+function Get-BriefNotes {
+    param([int]$Level)
+    $n = @()
+    if ($Level -ge 1) { $n += 'economy detail (.ai/contract/economy.md section 4)' }
+    if ($Level -ge 2) { $n += 'pre-checks (already above)' }
+    if ($Level -ge 3) { $n += 'validation plans (forgeos prompt)' }
+    if ($Level -ge 4) { $n += 'alternative names (.ai/tasks/inbox/)' }
+    if ($Level -ge 5) { $n += 'read list (forgeos prompt)' }
+    if ($Level -ge 6) { $n += 'session and policy (forgeos prompt)' }
+    if ($Level -ge 7) { $n += 'ledger line (.ai/context/current-state.md)' }
+    return ($n -join ', ')
+}
 
-Read first: $briefReadText
-The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.
+function Get-BriefBody {
+    param([int]$Level)
 
-Pre-checks: clean tree on $branch; HEAD is $commit; version is $bpVersion; reproduce any defect before fixing it.
-Governance: $govLine
-Scope: allowed -- $pkgAllowed. Forbidden -- $briefForbidden.
-Validation: narrow -- $vpFirstNarrow; full -- $vpFirstFull; ShellCheck from CI: $ciText
-Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.
+    $bBlocked = $briefBlockedText
+    if ($Level -ge 4 -and $briefAltFound) {
+        $bBlocked = $briefBlockedFirst + "`nAlternative: not chosen here -- $($inboxNames.Count) task record(s) already written in .ai/tasks/inbox/; read each record's Blocked section before activating one."
+    }
+    $bRead = $briefReadText
+    if ($Level -ge 5) {
+        $readItems = @($briefRead | Where-Object { $_ })
+        if ($readItems.Count -gt 3) {
+            $bRead = ((@($readItems | Select-Object -First 3) -join ', ') + ", and $($readItems.Count - 3) more that forgeos prompt lists in full")
+        }
+    }
 
-Do not:
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# ForgeOS brief -- $promptSubject")
+    $lines.Add('')
+    if ($Level -le 5) { $lines.Add("Session: $pkgSessionName | new session: $pkgNewSessionText | model: $pkgModel | effort: $pkgEffort") }
+    $lines.Add('Execution: single-agent only -- no subagents, review swarms, or background task loops.')
+    $lines.Add("Repository: $repoName @ $branch | HEAD $commit | version $bpVersion | state $projectState")
+    if ($Level -le 6) { $lines.Add("Now: $briefNow") }
+    $lines.Add("Capability: $recCapability -- its acceptance criteria are its row in $recSource; read that row before writing anything.")
+    foreach ($bl in ($bBlocked -split "`n")) { $lines.Add($bl) }
+    $lines.Add('')
+    $lines.Add("Read first: $bRead")
+    $lines.Add('The entry point (CLAUDE.md or AGENTS.md) loads the operating contract; read nothing else until the task proves the need.')
+    $lines.Add('')
+    if ($Level -le 1) { $lines.Add("Pre-checks: clean tree on $branch; HEAD is $commit; version is $bpVersion; reproduce any defect before fixing it.") }
+    $lines.Add("Governance: $govLine")
+    $lines.Add("Scope: allowed -- $pkgAllowed. Forbidden -- $briefForbidden.")
+    if ($Level -le 2) {
+        $lines.Add("Validation: narrow -- $vpFirstNarrow; full -- $vpFirstFull; ShellCheck from CI: $ciText")
+    } else {
+        $lines.Add('Validation: forgeos prompt lists the narrow and full plans.')
+    }
+    if ($Level -eq 0) {
+        $lines.Add('Economy: large-session protocol, .ai/contract/economy.md section 4 -- effort is depth per decision, not a session licence; read specs by named section, never a chapter; full suite once, on the final diff; other shell and selftests only if shell or cross-platform tooling changed; SQL rehearsal only after SQL changed; no edits during a long check; compact output, summarize logs; third full run or second rehearsal: stop, refresh the ledger, hand off.')
+    } else {
+        $lines.Add('Economy: .ai/contract/economy.md section 4, the large-session protocol.')
+    }
+    $lines.Add('')
+    $lines.Add('Do not:')
+    $lines.Add('')
+    # The brief prints the rules the way its own --json doNot array reports them and the way the
+    # POSIX brief prints them: bare text, no bullet marker. $dnText keeps the '- ' for the session
+    # package, where the list is read as markdown.
+    foreach ($dl in $briefDoNot) { $lines.Add($dl) }
+    $lines.Add('')
+    $lines.Add('Report: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.')
+    $lines.Add('Stop after the local commit and report. Do not push.')
+    return (($lines -join "`n") + "`n")
+}
 
-$dnText
-
-Report: Summary; Files Changed; Validation with observed results; Acceptance Criteria, each row criterion verified; Risks and Limitations; Decisions; Next Action; State, with the ledger refreshed first.
-Stop after the local commit and report. Do not push.
-"@
-# A here-string carries the script file's own line endings (CRLF here); the POSIX half emits LF.
-# Normalized once so the JSON string, the byte count, and the wrapper's byte-identity all agree.
-$briefPrompt = $briefPrompt -replace "`r`n", "`n"
-$briefBytes = [System.Text.Encoding]::UTF8.GetByteCount($briefPrompt)
-$briefTokens = [int][math]::Ceiling($briefBytes / 4)
+# Climb the ladder until the WHOLE emitted text fits -- the notice is part of what is measured, so
+# the number the brief prints is the number it costs. The notice carries its own size, so its token
+# figure is settled by repeating the measurement until it stops changing.
+$briefLevel = 0
+$briefBytes = 0; $briefTokens = 0; $briefWithin = $false; $briefOverflow = 0; $briefMandatoryOverflow = $false
+$briefPrompt = ''
+while ($true) {
+    $bodyText = Get-BriefBody -Level $briefLevel
+    $briefNotes = Get-BriefNotes -Level $briefLevel
+    $bodyTokens = [int][math]::Ceiling([System.Text.Encoding]::UTF8.GetByteCount($bodyText) / 4)
+    $variant = 'fits'
+    if ($briefLevel -ge $briefMaxLevel -and $bodyTokens -gt $briefMaxTokens) { $variant = 'overflow' }
+    $briefTokens = $bodyTokens
+    foreach ($pass in 1..3) {
+        if ($variant -eq 'overflow') {
+            $notice = "Budget: ~$briefTokens tokens of $briefMaxTokens (UTF-8 bytes / 4, an estimate) -- MANDATORY OVERFLOW by $($briefTokens - $briefMaxTokens). Every optional section was already dropped and nothing above was truncated."
+        } elseif ($briefNotes) {
+            $notice = "Budget: ~$briefTokens tokens of $briefMaxTokens (UTF-8 bytes / 4, an estimate). Shortened to fit: $briefNotes."
+        } else {
+            $notice = "Budget: ~$briefTokens tokens of $briefMaxTokens (UTF-8 bytes / 4, an estimate)."
+        }
+        $fullText = ($bodyText + $notice)
+        $briefBytes = [System.Text.Encoding]::UTF8.GetByteCount($fullText)
+        $next = [int][math]::Ceiling($briefBytes / 4)
+        if ($next -eq $briefTokens) { break }
+        $briefTokens = $next
+    }
+    if ($briefTokens -le $briefMaxTokens -or $briefLevel -ge $briefMaxLevel) {
+        $briefPrompt = $fullText
+        break
+    }
+    $briefLevel++
+}
 $briefWithin = ($briefTokens -le $briefMaxTokens)
+if (-not $briefWithin) {
+    $briefOverflow = $briefTokens - $briefMaxTokens
+    $briefMandatoryOverflow = $true
+}
+$briefShortened = Get-BriefNotes -Level $briefLevel
 
 $map = [ordered]@{
     product = [ordered]@{
@@ -1333,6 +1427,10 @@ if ($Json -and $Section -eq 'brief') {
         budget         = [ordered]@{
             bytes = $briefBytes; estimatedTokens = $briefTokens; maxTokens = $briefMaxTokens
             withinBudget = $briefWithin; method = 'UTF-8 bytes / 4, rounded up'
+            reductionLevel = $briefLevel
+            shortened = $(if ($briefShortened) { $briefShortened } else { $null })
+            mandatoryOverflow = $briefMandatoryOverflow
+            overflowTokens = $briefOverflow
         }
         generatedPrompt = $briefPrompt
         safety          = $status.safety

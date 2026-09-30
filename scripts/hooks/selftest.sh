@@ -990,6 +990,25 @@ rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
 cmp -s "$rfx.before" "$rfx.after" && ok=$((ok + 1))
 assert_code 'rules: the brief, the package, and the JSON carry the same list unchanged' 4 "$ok"
 
+# --- the capture itself -------------------------------------------------------------------------
+# A multibyte rule must survive the trip from the engine to the assertion. On Windows the engines
+# print UTF-8 but the harness used to decode it with whatever code page the console carried, so on
+# a console left at 437 three multibyte cases failed on the transport and not on the behaviour.
+# Here the same contract is asserted from the POSIX side: what the engine printed is what the test
+# compares, byte for byte.
+rfx="$(brief_fx encoding-capture)"
+{ printf '# C\n\n## Prompt Prohibitions\n\n### Always\n\n'
+  printf -- '- لا تدفع إلى المستودع\n'; } > "$rfx/.ai/context/constraints.md"
+printf 'لا تدفع إلى المستودع\n' > "$rfx/expected.txt"
+rule_lines "$rfx" brief > "$rfx/got.txt"
+captured="$(rule_lines "$rfx" brief)"
+ok=0
+cmp -s "$rfx/got.txt" "$rfx/expected.txt" && ok=$((ok + 1))
+[ "$captured" = "لا تدفع إلى المستودع" ] && ok=$((ok + 1))
+[ "$(wc -c < "$rfx/got.txt" | tr -d ' ')" -eq "$(wc -c < "$rfx/expected.txt" | tr -d ' ')" ] && ok=$((ok + 1))
+rules_match_json "$rfx" "$rfx/expected.txt" && ok=$((ok + 1))
+assert_code 'encoding: multibyte output survives capture whatever the console code page is' 4 "$ok"
+
 # --- promoted roles: structured, and the prose form still honoured -------------------------------
 # content-site does not require security-reviewer. Only a promotion makes it enforceable, so these
 # cases fail the moment the promotion stops being read.
@@ -1095,6 +1114,46 @@ assert_code 'links: a single parent reference still resolves' 0 "$(run_link_chec
 
 printf '# Notes\n\nSee `../../.ai/memory/decisions/missing.md`.\n' > "$link_project/docs/Client/notes.md"
 assert_code 'links: a broken parent-parent reference still fails' 1 "$(run_link_check)"
+
+# A record may legitimately cite a file the BUILD produces. It is absent from a clean checkout and
+# from CI, so the checker called it broken -- reported by a real adoption. Declaring it is narrow
+# and explicit: only what the project declares is excused, and only while it does not resolve.
+declare_generated() {   # declare_generated <json-array-body>
+  sed -i 's|"generatedArtifacts": \[[^]]*\]|"generatedArtifacts": ['"$1"']|' \
+    "$link_project/scripts/lib/blueprint-manifest.json"
+}
+
+printf '# Notes\n\nThe build writes `dist/robots.txt`.\n' > "$link_project/docs/Client/notes.md"
+declare_generated '"^dist/"'
+assert_code 'links: a declared build output is not a broken link' 0 "$(run_link_check)"
+
+# The declaration excuses exactly what it names. Anything else that fails to resolve still fails,
+# which is what keeps this from being an ignore list.
+printf '# Notes\n\nThe build writes `build/output.txt`.\n' > "$link_project/docs/Client/notes.md"
+assert_code 'links: an undeclared generated path is still broken' 1 "$(run_link_check)"
+
+# WHERE THE DECLARATION LIVES. The manifest is portable: declaring a build output there makes the
+# whole file locally modified, so sync skips it and the project stops receiving manifest updates
+# unless it passes --force, which would erase the declaration. Measured, then moved:
+# .ai/context/link-policy.json is project-specific, so sync never copies it and the manifest stays
+# pristine. The manifest key remains the upstream default.
+declare_generated ''
+mkdir -p "$link_project/.ai/context"
+printf '{\n  "generatedArtifacts": ["^dist/"]\n}\n' > "$link_project/.ai/context/link-policy.json"
+printf '# Notes\n\nThe build writes `dist/robots.txt`.\n' > "$link_project/docs/Client/notes.md"
+assert_code 'links: a project-owned declaration is read while the manifest stays pristine' 0 "$(run_link_check)"
+
+# A declaration covers its own path and nothing beside it. dist-old/, mydist/ and distribution/
+# all start with the same four letters and none of them is dist/.
+printf '# Notes\n\nSee `dist-old/robots.txt`, `mydist/robots.txt` and `distribution/notes.md`.\n' \
+  > "$link_project/docs/Client/notes.md"
+assert_code 'links: a declared pattern does not exempt a sibling path' 1 "$(run_link_check)"
+
+rm -f "$link_project/.ai/context/link-policy.json"
+printf '# Notes\n\nSee `../README.md`.\n' > "$link_project/docs/Client/notes.md"
+
+declare_generated ''
+printf '# Notes\n\nSee `../README.md`.\n' > "$link_project/docs/Client/notes.md"
 rm -f "$link_project/docs/Client/notes.md"
 
 

@@ -53,6 +53,28 @@ mapfile -t ROOTS       < <(read_cfg '.linkCheck.roots[]'            'print("\n".
 mapfile -t ROOT_FILES  < <(read_cfg '.linkCheck.includeRootFiles[]' 'print("\n".join(d["includeRootFiles"]))')
 mapfile -t IGNORE_PRE  < <(read_cfg '.linkCheck.ignorePrefixes[]'   'print("\n".join(d["ignorePrefixes"]))')
 mapfile -t IGNORE_PAT  < <(read_cfg '.linkCheck.ignorePathPatterns[]' 'print("\n".join(d["ignorePathPatterns"]))')
+# Declared build outputs, from two places that are unioned.
+#
+# The manifest key is the UPSTREAM DEFAULT and is empty here. The project's own declarations
+# belong in .ai/context/link-policy.json, which is project-specific: sync never copies it, so
+# declaring a build output does not make the portable manifest locally modified and does not
+# cost the project every future manifest update. The file is optional; no build, no file.
+mapfile -t GENERATED_PAT < <(read_cfg '.linkCheck.generatedArtifacts[]? // empty' 'print("\n".join(d.get("generatedArtifacts", [])))' 2>/dev/null || true)
+LINK_POLICY="$REPO_ROOT/.ai/context/link-policy.json"
+if [ -r "$LINK_POLICY" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    mapfile -O "${#GENERATED_PAT[@]}" -t GENERATED_PAT < <(jq -r '.generatedArtifacts[]? // empty' "$LINK_POLICY" 2>/dev/null || true)
+  elif [ -n "$JSON_PY" ]; then
+    mapfile -O "${#GENERATED_PAT[@]}" -t GENERATED_PAT < <("$JSON_PY" -c "
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+print('\n'.join(d.get('generatedArtifacts', []) or []))
+" "$LINK_POLICY" 2>/dev/null | tr -d '\r' || true)
+  fi
+fi
 
 read_dist() {   # read_dist <jq-filter> <python-expression>
   if command -v jq >/dev/null 2>&1; then
@@ -113,6 +135,17 @@ is_ignored() {
   return 1
 }
 
+# A reference the project declared as build output. Checked only after the path failed to
+# resolve: when the build has run, the file is there and is verified like any other.
+is_generated() {
+  local target="$1" p
+  for p in "${GENERATED_PAT[@]}"; do
+    [ -z "$p" ] && continue
+    [[ "$target" =~ $p ]] && return 0
+  done
+  return 1
+}
+
 is_portable() {
   local target="$1" p
   # Source-only first: release tooling sits inside a portable directory but is dropped by sync, so
@@ -151,6 +184,7 @@ is_project_owned() {
 
 broken=''
 unportable=''
+generated=''
 checked=0
 
 # PERFORMANCE. The first version of this loop spawned three to five processes per markdown LINE
@@ -244,7 +278,11 @@ for file in "${files[@]}"; do
     fi
 
     if [ -z "$target_rel" ]; then
-      broken="${broken}  ${file_rel}:${lineno}  ->  ${target}"$'\n'
+      if is_generated "$target"; then
+        generated="${generated}  ${file_rel}:${lineno}  ->  ${target}"$'\n'
+      else
+        broken="${broken}  ${file_rel}:${lineno}  ->  ${target}"$'\n'
+      fi
       continue
     fi
 
@@ -258,6 +296,17 @@ for file in "${files[@]}"; do
 done
 
 failed=0
+
+if [ -n "$generated" ]; then
+  gen_count="$(printf '%s' "$generated" | grep -c '' || true)"
+  printf 'Declared build output, UNVERIFIED  (%s reference(s))\n\n' "$gen_count"
+  printf '%s' "$generated" | sort
+  printf '\nThese match a declared generated-artifact pattern and DO NOT RESOLVE here. That is\n'
+  printf 'expected in a clean checkout and in CI, and it is NOT evidence that the build produced\n'
+  printf 'them: this check never ran a build and verified nothing. Confirm they exist by running\n'
+  printf 'the build and re-running this check -- a path that resolves is checked like any other.\n'
+  printf 'Every other reference was checked normally.\n\n'
+fi
 
 if [ -n "$broken" ]; then
   failed=1

@@ -19,7 +19,7 @@ it in. Available as `.ps1` and `.sh` with identical behavior.
 | `check-public-surface` | The blueprint's own public launch page against what the tools report — the stated version, the check-row counts, the proof sections, every numeric claim the tools measure -- self-test cases, policy controls, link counts -- handed to it by `check-all` through `--measured`, whether every public trust file is DECLARED source-only rather than staying home by accident, and whether any could reach an adopting project. Audits the source repository only; an adopted project is reported as not applicable | **yes** — `check-all` runs it with `--fail-on-drift` |
 | `check-selftest-parity` | The two hook self-tests ran the same cases, in the same order. CI only; it compares their published output | yes, in CI |
 
-`scripts/hooks/selftest` is also run by `check-all` as a gating check: **246 cases** covering
+`scripts/hooks/selftest` is also run by `check-all` as a gating check: **251 cases** covering
 `guard-bash`, `scan-secrets`, `guard-discovery`, `guard-governance`, the discovery gate on `new-task`, the closure
 record written by `finish-task`, profile role evidence, the public-surface audit, and the adoption and context tooling --
 `sync-blueprint` and `build-context` -- identical in both shells.
@@ -434,6 +434,59 @@ Extraction is now one `awk` pass per **file**, and every per-reference decision 
 
 Same reference count, same broken and unportable verdicts on the repository and on planted
 violations — measured before and after, not assumed.
+## Declared build outputs
+
+A record may legitimately cite a file the project's **build** produces. That file is not in version
+control, so in a clean checkout -- and in CI, which is always a clean checkout -- the citation
+cannot resolve, and the checker called it broken. A real adoption reported exactly that, against an
+archived record it could not rewrite.
+
+Ignoring the path would have hidden genuine mistakes beside it, so the distinction is declared.
+
+### Where a project declares them
+
+A file named `link-policy.json` in the project's `.ai/context/` directory -- optional, and the
+project's own:
+
+```json
+{
+  "generatedArtifacts": ["^dist/", "^public/build/"]
+}
+```
+
+Each entry is a **regular expression matched against the repository-relative path** as written in
+the reference. `^dist/` covers what the build writes under `dist/`; it does not cover `dist-old/`, `mydist/` or
+`distribution/`, because none of those is `dist/`. Anchor with `^` unless you mean otherwise.
+
+That directory is project-specific: sync never copies it. That is the whole point of putting the
+declaration there. The manifest carries the same key as an **upstream default**, left empty, and
+the two are unioned -- but declaring in the manifest makes that portable file locally modified, so
+sync then skips it and the project stops receiving manifest updates until it passes `--force`,
+which would erase the declaration. Declaring a build output is ordinary project configuration and
+must not cost a project its updates, so the project-owned file is the supported home.
+
+### What the report does and does not claim
+
+An unresolved reference that matches a declaration is printed under **Declared build output,
+UNVERIFIED**. The wording is deliberate: the checker ran no build and confirmed nothing. It states
+that the path did not resolve and that this is expected in a clean checkout.
+
+**To verify the outputs actually exist, run your normal build and re-run the check.** Once the file
+is present the reference resolves and is checked like any other path -- it stops appearing in that
+section, which is the signal that the build really produced it.
+
+It is **not** an ignore list, and the difference is the point:
+
+| | `ignorePathPatterns` | `generatedArtifacts` |
+| --- | --- | --- |
+| Reference is counted | no, skipped entirely | yes |
+| Reference is reported | no | yes, in its own section |
+| Excused when the file exists | n/a | no -- it resolves and is checked like any other path |
+| Excused when the file is missing | yes, silently | yes, and said out loud |
+
+Anything not declared still fails, and a missing **source** file still fails. Empty in the
+blueprint, which builds nothing.
+
 ## Why `check-links` exists
 
 A reference to a file that does not exist sends an agent somewhere empty and costs a whole turn to

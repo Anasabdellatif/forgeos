@@ -40,6 +40,27 @@ $config = $manifest.linkCheck
 
 $ignorePrefixes = @($config.ignorePrefixes)
 $ignorePatterns = @($config.ignorePathPatterns)
+# Declared build outputs, from two places that are unioned.
+#
+# The manifest key is the UPSTREAM DEFAULT and is empty here. The project's own declarations belong
+# in .ai/context/link-policy.json, which is project-specific: sync never copies it, so declaring a
+# build output does not make the portable manifest locally modified and does not cost the project
+# every future manifest update. The file is optional; no build, no file.
+$generatedPatterns = @()
+if ($config.PSObject.Properties.Name -contains 'generatedArtifacts') {
+    $generatedPatterns = @($config.generatedArtifacts)
+}
+$linkPolicyPath = Join-Path $repoRoot '.ai\context\link-policy.json'
+if (Test-Path -LiteralPath $linkPolicyPath) {
+    try {
+        $linkPolicy = Get-Content -LiteralPath $linkPolicyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($linkPolicy.PSObject.Properties.Name -contains 'generatedArtifacts') {
+            $generatedPatterns = @($generatedPatterns) + @($linkPolicy.generatedArtifacts)
+        }
+    } catch {
+        Write-Output "Ignoring unreadable .ai/context/link-policy.json: $($_.Exception.Message)"
+    }
+}
 
 # Portability sets: everything sync actually places in an adopting project -- the portable half,
 # plus the scaffolding it seeds. A file that lands there and references something that does not
@@ -105,7 +126,19 @@ $pathShape = '^[A-Za-z0-9_.][A-Za-z0-9_./\-]*/[A-Za-z0-9_.\-]+\.(md|ps1|sh|json|
 
 $broken = [System.Collections.Generic.List[psobject]]::new()
 $unportable = [System.Collections.Generic.List[psobject]]::new()
+$generated = [System.Collections.Generic.List[psobject]]::new()
 $checked = 0
+
+# A reference the project declared as build output. Consulted only after the path failed to
+# resolve: when the build has run, the file is there and is checked like any other.
+function Test-GeneratedArtifact {
+    param([string]$Path)
+    foreach ($pattern in $generatedPatterns) {
+        if ([string]::IsNullOrEmpty($pattern)) { continue }
+        if ([regex]::IsMatch($Path, $pattern)) { return $true }
+    }
+    return $false
+}
 
 function Test-Ignored {
     param([string]$Path)
@@ -163,11 +196,13 @@ foreach ($file in $files) {
             }
 
             if ($null -eq $targetRel) {
-                $broken.Add([pscustomobject]@{
+                $record = [pscustomobject]@{
                     File   = $fileRel
                     Line   = $lineNumber
                     Target = $target
-                })
+                }
+                if (Test-GeneratedArtifact -Path $target) { $generated.Add($record) }
+                else { $broken.Add($record) }
                 continue
             }
 
@@ -187,11 +222,26 @@ foreach ($file in $files) {
 
 $failed = $false
 
+if ($generated.Count -gt 0) {
+    Write-Output "Declared build output, UNVERIFIED  ($($generated.Count) reference(s))"
+    Write-Output ''
+    $generated | Sort-Object File, Line, Target | ForEach-Object {
+        Write-Output ("  {0}:{1}  ->  {2}" -f $_.File, $_.Line, $_.Target)
+    }
+    Write-Output ''
+    Write-Output 'These match a declared generated-artifact pattern and DO NOT RESOLVE here. That is'
+    Write-Output 'expected in a clean checkout and in CI, and it is NOT evidence that the build produced'
+    Write-Output 'them: this check never ran a build and verified nothing. Confirm they exist by running'
+    Write-Output 'the build and re-running this check -- a path that resolves is checked like any other.'
+    Write-Output 'Every other reference was checked normally.'
+    Write-Output ''
+}
+
 if ($broken.Count -gt 0) {
     $failed = $true
     Write-Output "Link check FAILED  ($checked reference(s) checked, $($broken.Count) broken)"
     Write-Output ''
-    $broken | Sort-Object File, Line | ForEach-Object {
+    $broken | Sort-Object File, Line, Target | ForEach-Object {
         Write-Output ("  {0}:{1}  ->  {2}" -f $_.File, $_.Line, $_.Target)
     }
     Write-Output ''
@@ -204,7 +254,7 @@ if ($unportable.Count -gt 0) {
     if ($broken.Count -gt 0) { Write-Output '' }
     Write-Output "Portability check FAILED  ($($unportable.Count) portable file reference(s) that sync does not place)"
     Write-Output ''
-    $unportable | Sort-Object File, Line | ForEach-Object {
+    $unportable | Sort-Object File, Line, Target | ForEach-Object {
         Write-Output ("  {0}:{1}  ->  {2}" -f $_.File, $_.Line, $_.Target)
     }
     Write-Output ''

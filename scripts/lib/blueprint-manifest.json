@@ -666,7 +666,9 @@
       "settings\\.local\\.json$",
       "\\.\\.\\.",
       "^\\.ai/product/"
-    ]
+    ],
+    "$generatedArtifactsComment": "UPSTREAM DEFAULT, left empty. A project declares its own build outputs in .ai/context/link-policy.json, which is project-specific and therefore survives every update untouched; declaring them HERE instead makes this portable file locally modified, so sync skips it and the project stops receiving manifest updates until it passes --force, which would erase the declaration. The two lists are unioned. A reference matching one is counted and reported as UNVERIFIED when it does not resolve, which is what a clean checkout and CI look like; it is not an ignore list, and an undeclared path or a missing source file still fails.",
+    "generatedArtifacts": []
   },
   "placeholderScan": {
     "$comment": "Directories scanned by check-placeholders for unfilled TBD markers, with the adoption weight of each. Weight reflects how much an unfilled fact degrades agent behavior.",

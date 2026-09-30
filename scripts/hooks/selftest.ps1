@@ -577,16 +577,51 @@ try {
         $body = "# P`n`n## Metadata`n`n- Status: ``active```n- Updated: ``2026-01-01```n- Related task: ``.ai/tasks/active/t1.md```n"
         [System.IO.File]::WriteAllText($Path, $body, (New-Object System.Text.UTF8Encoding($false)))
     }
+    # Capture a child's output as UTF-8, whatever the console code page happens to be.
+    #
+    # WHY THIS EXISTS. The engines set [Console]::OutputEncoding to UTF-8 before they print, so
+    # what they emit is always UTF-8. `& powershell.exe ... | Out-String` then decodes it with the
+    # PARENT's [Console]::OutputEncoding -- and on a console left at code page 437 that reads the
+    # child's UTF-8 bytes as IBM437. Three multibyte cases failed that way on a real adopter's
+    # machine: the failure was in the capture, not in the fixtures, not in the engine, and not in
+    # anything those cases were meant to assert.
+    #
+    # Redirecting to files and reading them back with an explicit encoding takes the console out of
+    # the path. It changes no global console state, so a run cannot leave the user's shell altered.
+    function Invoke-CapturedUtf8 {
+        param([string[]]$Arguments, [switch]$MergeError)
+        # The system temp directory, not a fixture root: fixture roots are created and removed
+        # across the suite, and redirecting into one that has already been cleaned up yields an
+        # empty capture and a case that fails for a reason it was never testing.
+        $stamp = [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $captureDir = [System.IO.Path]::GetTempPath()
+        $outFile = Join-Path $captureDir "blueprint-capture-$stamp.out"
+        $errFile = Join-Path $captureDir "blueprint-capture-$stamp.err"
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $Arguments -NoNewWindow `
+                               -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            $text = ''
+            if (Test-Path -LiteralPath $outFile) {
+                $text = [System.IO.File]::ReadAllText($outFile, [System.Text.Encoding]::UTF8)
+            }
+            if ($MergeError -and (Test-Path -LiteralPath $errFile)) {
+                $text += [System.IO.File]::ReadAllText($errFile, [System.Text.Encoding]::UTF8)
+            }
+            return @{ Code = $p.ExitCode; Text = $text }
+        } finally {
+            $ErrorActionPreference = $previous
+            foreach ($f in @($outFile, $errFile)) {
+                if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
     function Invoke-Close {
         param([string]$Root, [string]$Task, [switch]$CheckOnly)
         $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\ai\finish-task.ps1'), '-TaskPath', $Task)
         if ($CheckOnly) { $argv += '-Check' }
-        $previous = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        try {
-            $text = (& powershell.exe @argv 2>&1 | Out-String)
-            return @{ Code = $LASTEXITCODE; Text = $text }
-        } finally { $ErrorActionPreference = $previous }
+        return (Invoke-CapturedUtf8 -Arguments $argv -MergeError)
     }
 
     $cr = New-CloseFixture 'close-ok'
@@ -845,12 +880,7 @@ try {
         param([string]$Root, [switch]$AsJson)
         $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-status.ps1'), '-Section', 'brief')
         if ($AsJson) { $a += '-Json' }
-        $prev = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        try {
-            $text = (& powershell.exe @a 2>$null | Out-String)
-            return @{ Code = $LASTEXITCODE; Text = $text }
-        } finally { $ErrorActionPreference = $prev }
+        return (Invoke-CapturedUtf8 -Arguments $a)
     }
     function Get-BriefBudget {
         param([string]$Root)
@@ -944,9 +974,7 @@ try {
         param([string]$Root, [string]$Section, [switch]$AsJson)
         $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-status.ps1'), '-Section', $Section)
         if ($AsJson) { $a += '-Json' }
-        $prev = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        try { return (& powershell.exe @a 2>$null | Out-String) } finally { $ErrorActionPreference = $prev }
+        return (Invoke-CapturedUtf8 -Arguments $a).Text
     }
     function Get-RuleLines {
         param([string]$Root, [string]$Section)
@@ -1060,6 +1088,30 @@ try {
     if ($rBefore -ceq $rAfter) { $rOk++ }
     Assert-ExitCode -Case 'rules: the brief, the package, and the JSON carry the same list unchanged' -Expected 4 -Actual $rOk
 
+    # --- the capture itself ---------------------------------------------------------------------
+    # The engines print UTF-8. The harness used to read them back through the console pipe, which
+    # decodes with the PARENT's [Console]::OutputEncoding -- so a console left at code page 437
+    # turned a multibyte rule into mojibake and failed three cases on the transport. This case
+    # forces the console to 437 for the length of one capture and requires the text to arrive
+    # intact anyway; it restores the previous encoding whatever happens.
+    $rfx = New-BriefFixture 'encoding-capture'
+    $arCapture = -join (@(0x0644,0x0627,0x20,0x062A,0x062F,0x0641,0x0639,0x20,0x0625,0x0644,0x0649,0x20,0x0627,0x0644,0x0645,0x0633,0x062A,0x0648,0x062F,0x0639) | ForEach-Object { [char]$_ })
+    Write-Fixture (Join-Path $rfx '.ai\context\constraints.md') ("# C`n`n## Prompt Prohibitions`n`n### Always`n`n- $arCapture`n")
+    $encOk = 0
+    $encPrev = [Console]::OutputEncoding
+    try {
+        try { [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437) } catch { }
+        $encGot = Get-RuleLines -Root $rfx -Section brief
+        if ($encGot -ceq $arCapture) { $encOk++ }
+        if ((Get-RuleJson -Root $rfx) -ceq $arCapture) { $encOk++ }
+        $encPrompt = Get-RuleLines -Root $rfx -Section prompt
+        if ($encPrompt -ceq ('- ' + $arCapture)) { $encOk++ }
+        if ($encGot.Length -eq $arCapture.Length) { $encOk++ }
+    } finally {
+        try { [Console]::OutputEncoding = $encPrev } catch { }
+    }
+    Assert-ExitCode -Case 'encoding: multibyte output survives capture whatever the console code page is' -Expected 4 -Actual $encOk
+
     # --- promoted roles: structured, and the prose form still honoured ---------------------------
     # content-site does not require security-reviewer. Only a promotion makes it enforceable, so
     # these cases fail the moment the promotion stops being read.
@@ -1156,6 +1208,53 @@ try {
 
     [System.IO.File]::WriteAllText($linkNotes, "# Notes`n`nSee ``../../.ai/memory/decisions/missing.md``.`n", (New-Object System.Text.UTF8Encoding($false)))
     Assert-ExitCode -Case 'links: a broken parent-parent reference still fails' -Expected 1 -Actual (Invoke-LinkCheck)
+
+    # A record may legitimately cite a file the BUILD produces. It is absent from a clean checkout
+    # and from CI, so the checker called it broken -- reported by a real adoption. Declaring it is
+    # narrow and explicit: only what the project declares is excused, and only while it fails to
+    # resolve.
+    function Set-DeclaredGenerated {
+        param([string]$Body)
+        $mf = Join-Path $linkProject 'scripts\lib\blueprint-manifest.json'
+        $txt = [System.IO.File]::ReadAllText($mf, [System.Text.Encoding]::UTF8)
+        $txt = [regex]::Replace($txt, '"generatedArtifacts": \[[^\]]*\]', '"generatedArtifacts": [' + $Body + ']')
+        [System.IO.File]::WriteAllText($mf, $txt, (New-Object System.Text.UTF8Encoding($false)))
+    }
+
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'),
+        "# Notes`n`nThe build writes ``dist/robots.txt``.`n")
+    Set-DeclaredGenerated '"^dist/"'
+    Assert-ExitCode -Case 'links: a declared build output is not a broken link' -Expected 0 -Actual (Invoke-LinkCheck)
+
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'),
+        "# Notes`n`nThe build writes ``build/output.txt``.`n")
+    Assert-ExitCode -Case 'links: an undeclared generated path is still broken' -Expected 1 -Actual (Invoke-LinkCheck)
+
+    # WHERE THE DECLARATION LIVES. The manifest is portable: declaring a build output there makes
+    # the whole file locally modified, so sync skips it and the project stops receiving manifest
+    # updates unless it passes --force, which would erase the declaration. Measured, then moved:
+    # .ai/context/link-policy.json is project-specific, so sync never copies it and the manifest
+    # stays pristine. The manifest key remains the upstream default.
+    Set-DeclaredGenerated ''
+    $linkPolicyDir = Join-Path $linkProject '.ai\context'
+    New-Item -ItemType Directory -Path $linkPolicyDir -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $linkPolicyDir 'link-policy.json'),
+        "{`n  `"generatedArtifacts`": [`"^dist/`"]`n}`n")
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'),
+        "# Notes`n`nThe build writes ``dist/robots.txt``.`n")
+    Assert-ExitCode -Case 'links: a project-owned declaration is read while the manifest stays pristine' -Expected 0 -Actual (Invoke-LinkCheck)
+
+    # A declaration covers its own path and nothing beside it. dist-old/, mydist/ and
+    # distribution/ all start with the same four letters and none of them is dist/.
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'),
+        "# Notes`n`nSee ``dist-old/robots.txt``, ``mydist/robots.txt`` and ``distribution/notes.md``.`n")
+    Assert-ExitCode -Case 'links: a declared pattern does not exempt a sibling path' -Expected 1 -Actual (Invoke-LinkCheck)
+
+    Remove-Item -LiteralPath (Join-Path $linkPolicyDir 'link-policy.json') -Force -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'), "# Notes`n`nSee ``../README.md``.`n")
+
+    Set-DeclaredGenerated ''
+    [System.IO.File]::WriteAllText((Join-Path $linkProject 'docs\Client\notes.md'), "# Notes`n`nSee ``../README.md``.`n")
     Remove-Item -LiteralPath $linkNotes -Force -ErrorAction SilentlyContinue
 } finally {
     Remove-Item -LiteralPath $taskRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -3340,8 +3439,7 @@ try {
         param([string]$Root, [switch]$AsJson)
         $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\command\project-intake.ps1'))
         if ($AsJson) { $a += '-Json' }
-        $text = ((& powershell.exe @a 2>&1) | Out-String)
-        return @{ Code = $LASTEXITCODE; Text = $text }
+        return (Invoke-CapturedUtf8 -Arguments $a -MergeError)
     }
     function Get-IntakeFileList([string]$Root) {
         return ((@(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $_.FullName }) | Sort-Object) -join "`n")
